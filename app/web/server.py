@@ -25,6 +25,7 @@ SESSIONS: Dict[str, Session] = {}
 
 class PromptRequest(BaseModel):
     prompt: str
+    mode: str = "agent"  # "agent" runs the tool loop, "chat" answers directly
 
 
 class AnswerRequest(BaseModel):
@@ -121,13 +122,8 @@ def create_app() -> FastAPI:
         prompt = request.prompt.strip()
         if not prompt:
             raise HTTPException(status_code=400, detail="Empty prompt")
-        if session.pending_question is not None:
-            session.answer(prompt)
-            return session.info()
-        if session.busy:
-            raise HTTPException(status_code=409, detail="Agent is already running")
-        session.start(prompt)
-        return session.info()
+        action = session.submit(prompt, mode=request.mode)
+        return {**session.info(), "action": action}
 
     @app.post("/api/sessions/{session_id}/answer")
     async def answer(session_id: str, request: AnswerRequest) -> Dict[str, Any]:

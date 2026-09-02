@@ -166,10 +166,17 @@ Prefer a browser over the terminal? Start the web UI:
 python run_web.py            # http://localhost:8000
 ```
 
-It streams every agent step live, lets you answer the agent's `ask_human`
-questions, stop a run and download whatever lands in `workspace/`. Use
-`--host` / `--port` (or the `OPENMANUS_HOST` / `OPENMANUS_PORT` environment
-variables) to change the bind address.
+The layout mirrors the hosted Manus: tasks on the left, the conversation in
+the middle, and the agent's computer on the right - a panel that follows the
+run and shows the terminal for `python_execute`, the file for
+`str_replace_editor`, and browser screenshots as they come back from the
+browser tools. Every tool call becomes a step you can click to replay what
+happened at that point. There is an agent mode (the full tool loop) and a chat
+mode (a direct answer, no tools), the agent's `ask_human` questions are
+answered in the same composer, messages sent mid-run are queued, and files the
+agent produces can be downloaded from the Files tab. Use `--host` / `--port`
+(or the `OPENMANUS_HOST` / `OPENMANUS_PORT` environment variables) to change
+the bind address.
 
 With Docker, `docker compose up` builds the image and serves the same UI on
 port 8000; `config/` and `workspace/` are mounted from the host, so you can
