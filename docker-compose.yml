@@ -1,0 +1,17 @@
+services:
+  openmanus:
+    build: .
+    image: openmanus:latest
+    # Web interface on http://localhost:8000
+    command: python run_web.py --host 0.0.0.0 --port 8000
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./config:/app/OpenManus/config
+      - ./workspace:/app/OpenManus/workspace
+      - ./logs:/app/OpenManus/logs
+    extra_hosts:
+      # lets the container reach a local Ollama / LM Studio running on the host
+      - "host.docker.internal:host-gateway"
+    stdin_open: true
+    tty: true

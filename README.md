@@ -158,6 +158,25 @@ python main.py
 
 Then input your idea via terminal!
 
+### Web interface
+
+Prefer a browser over the terminal? Start the web UI:
+
+```bash
+python run_web.py            # http://localhost:8000
+```
+
+It streams every agent step live, lets you answer the agent's `ask_human`
+questions, stop a run and download whatever lands in `workspace/`. Use
+`--host` / `--port` (or the `OPENMANUS_HOST` / `OPENMANUS_PORT` environment
+variables) to change the bind address.
+
+With Docker, `docker compose up` builds the image and serves the same UI on
+port 8000; `config/` and `workspace/` are mounted from the host, so you can
+edit `config/config.toml` without entering the container. A model server
+running on the host machine (Ollama, LM Studio, ...) is reachable from inside
+the container as `http://host.docker.internal:11434/v1`.
+
 For MCP tool version, you can run:
 ```bash
 python run_mcp.py
