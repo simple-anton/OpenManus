@@ -17,6 +17,7 @@ from pydantic import BaseModel
 from app.config import config
 from app.logger import logger
 from app.web import api_tools as api_tools_store
+from app.web import diagnostics
 from app.web import settings as settings_store
 from app.web import skills as skills_store
 from app.web.session import Session
@@ -82,12 +83,13 @@ def _log_sink(message) -> None:
     session = SESSIONS.get(record["extra"].get("web_session"))
     if session is None:
         return
-    session.publish(
-        "log",
-        level=record["level"].name,
-        message=record["message"],
-        name=record["name"],
-    )
+    level = record["level"].name
+    session.publish("log", level=level, message=record["message"], name=record["name"])
+    if level in {"WARNING", "ERROR", "CRITICAL"}:
+        # do not leave the user staring at an empty screen while retries happen
+        session.publish(
+            "notice", level=level, message=record["message"], name=record["name"]
+        )
 
 
 def _workspace_root(session_id: Optional[str]) -> Path:
@@ -173,7 +175,10 @@ def create_app() -> FastAPI:
 
     @app.post("/api/sessions")
     async def create_session() -> Dict[str, Any]:
-        session = Session(uuid.uuid4().hex[:12])
+        try:
+            session = Session(uuid.uuid4().hex[:12])
+        except RuntimeError as exc:
+            raise HTTPException(status_code=500, detail=str(exc))
         SESSIONS[session.id] = session
         return session.info()
 
@@ -491,6 +496,10 @@ def create_app() -> FastAPI:
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc))
         return {"result": result, "ok": not result.startswith("Error")}
+
+    @app.get("/api/health")
+    async def health() -> Dict[str, Any]:
+        return {"checks": await diagnostics.health_checks()}
 
     # -------------------------------------------------------------------- logs
 

@@ -84,6 +84,7 @@
   .tool .icon { width: 20px; text-align: center; }
   .tool .name { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12.5px; }
   .tool .hint { color: var(--muted); font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 380px; }
+  .tool .secs { color: var(--muted); font-size: 11.5px; }
   .tool .spin { width: 11px; height: 11px; border: 2px solid var(--line); border-top-color: var(--accent); border-radius: 50%; animation: spin .7s linear infinite; }
   .tool.failed { border-color: #f0c4c4; background: #fdf4f4; }
   @keyframes spin { to { transform: rotate(360deg); } }
@@ -94,6 +95,24 @@
   .card.result { border-color: #c9e3d0; background: #f4faf5; }
   .card.error { border-color: #f0c4c4; background: #fdf4f4; color: #8f2b2b; }
   .card .text { white-space: pre-wrap; word-break: break-word; }
+  .card.warn { border-color: #ecd9a6; background: #fdf9ee; }
+  .notice { display: flex; gap: 8px; align-items: baseline; font-size: 12px; line-height: 1.5;
+            color: var(--muted); padding: 2px 2px 2px 36px; }
+  .notice .mark { flex: none; }
+  .notice .src { flex: none; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; color: #a09b92; }
+  .notice .msg { word-break: break-word; }
+  .notice .times { flex: none; color: #a09b92; }
+  .notice.ERROR .mark, .notice.CRITICAL .mark { color: var(--red); }
+  .notice.WARNING .mark { color: var(--amber, #c2810a); }
+  .card .text.strong { font-weight: 600; margin-bottom: 5px; }
+  .card .advice { margin-top: 8px; color: #4c4a45; font-size: 12.5px; line-height: 1.5; }
+  .card h4 .badge { float: right; text-transform: none; letter-spacing: 0; font-size: 11px;
+                    background: #ece9e2; color: #4c4a45; padding: 2px 8px; border-radius: 20px; }
+  .check { display: flex; gap: 10px; padding: 9px 10px; border-bottom: 1px solid var(--line); }
+  .check .mark { flex: none; width: 18px; text-align: center; }
+  .check b { display: block; font-size: 13px; font-weight: 600; }
+  .check span { color: var(--muted); font-size: 12px; line-height: 1.5; }
+  .check .fix { color: #8f2b2b; font-size: 12px; line-height: 1.5; margin-top: 3px; }
   .card details { margin-top: 9px; }
   .card summary { cursor: pointer; color: var(--muted); font-size: 12.5px; }
   .card details pre.block { margin: 9px 0 0; max-height: 260px; overflow: auto; }
@@ -255,6 +274,7 @@
     <button data-tab="files" title="Файлы этой задачи: посмотреть, скачать, загрузить свои">Файлы</button>
     <button data-tab="tools" title="Что агент умеет вызывать в этой задаче">Инструменты</button>
     <button data-tab="model" title="Что уходит в модель и что она отвечает — полезно при странном поведении">Модель</button>
+    <button data-tab="health" title="Проверка настройки: отвечает ли модель, что с плагинами">Проверка</button>
     <button data-tab="logs" title="Технический журнал работы">Логи</button>
   </div>
   <div id="view"><div class="placeholder">Здесь появится то,<br />что делает агент</div></div>
@@ -473,6 +493,32 @@ function card(kind, heading, text) {
   return node;
 }
 
+function errorCard(event) {
+  const node = element("div", "card error");
+  const head = element("h4", null, "Сбой");
+  const badge = element("span", "badge", event.source || "OpenManus");
+  head.appendChild(badge);
+  node.appendChild(head);
+  node.appendChild(element("div", "text strong", event.title || event.message || "Ошибка"));
+  if (event.why) node.appendChild(element("div", "text", event.why));
+  if (event.advice) node.appendChild(element("div", "advice", "Что сделать: " + event.advice));
+  if (event.technical) {
+    const details = document.createElement("details");
+    details.appendChild(element("summary", null, "Техническая подробность"));
+    details.appendChild(element("pre", "block out", event.technical));
+    node.appendChild(details);
+  }
+  return node;
+}
+
+function warningCard(event) {
+  const node = element("div", "card warn");
+  node.appendChild(element("h4", null, "Предупреждение"));
+  node.appendChild(element("div", "text", event.message));
+  if (event.advice) node.appendChild(element("div", "advice", "Что сделать: " + event.advice));
+  return node;
+}
+
 function agentBlock(text) {
   const row = element("div", "agent");
   row.appendChild(element("div", "avatar", "M"));
@@ -525,6 +571,7 @@ function renderView() {
   if (tab === "files") return renderFiles();
   if (tab === "tools") return renderTools();
   if (tab === "model") return renderModel();
+  if (tab === "health") return renderHealth();
   if (tab === "logs") return renderLogs();
 
   const step = steps[activeStep];
@@ -711,6 +758,37 @@ function renderModel() {
   });
 }
 
+async function renderHealth() {
+  view.innerHTML = "";
+  const head = element("div", "viewhead");
+  head.appendChild(element("span", null, "Проверка настройки"));
+  const again = element("button", null, "Проверить заново");
+  again.onclick = renderHealth;
+  head.appendChild(again);
+  view.appendChild(head);
+  const status = element("div", "placeholder", "Проверяю…");
+  view.appendChild(status);
+
+  let checks;
+  try {
+    checks = (await api("/api/health")).checks;
+  } catch (error) {
+    status.textContent = "Не удалось выполнить проверку: " + error.message;
+    return;
+  }
+  status.remove();
+  checks.forEach((check) => {
+    const row = element("div", "check");
+    row.appendChild(element("div", "mark", check.ok === null ? "•" : check.ok ? "✓" : "✕"));
+    const body = element("div");
+    body.appendChild(element("b", null, check.name));
+    body.appendChild(element("span", null, check.detail));
+    if (check.advice) body.appendChild(element("div", "fix", check.advice));
+    row.appendChild(body);
+    view.appendChild(row);
+  });
+}
+
 function renderLogs() {
   const head = element("div", "viewhead");
   head.appendChild(element("span", null, "Живой журнал"));
@@ -752,9 +830,33 @@ async function showLogFiles() {
 }
 
 /* ------------------------------------------------------------ events */
+let runStats = { step: 0, total: 0, seconds: 0, tokens: 0 };
+
+function plural(count, one, few, many) {
+  const mod10 = count % 10, mod100 = count % 100;
+  if (mod10 === 1 && mod100 !== 11) return count + " " + one;
+  if (mod10 >= 2 && mod10 <= 4 && (mod100 < 10 || mod100 >= 20)) return count + " " + few;
+  return count + " " + many;
+}
+
+function renderProgress() {
+  const parts = ["Шаг " + runStats.step + " / " + runStats.total];
+  if (runStats.seconds >= 1) parts.push(Math.round(runStats.seconds) + " с");
+  if (runStats.tokens) parts.push((runStats.tokens / 1000).toFixed(1) + "k токенов");
+  $("progress").textContent = parts.join(" · ");
+  $("progress").title = "Сколько шагов сделано, сколько времени заняло и сколько токенов ушло в модель";
+}
+
 function setState(state) {
   $("stop").disabled = state !== "running";
-  if (state !== "running") $("progress").textContent = "";
+  if (state !== "running") {
+    const done = runStats.step
+      ? "Готово: " + plural(runStats.step, "шаг", "шага", "шагов")
+      : "";
+    $("progress").textContent = done && runStats.seconds >= 1
+      ? done + " · " + Math.round(runStats.seconds) + " с"
+      : done;
+  }
 }
 
 function render(event) {
@@ -781,7 +883,14 @@ function render(event) {
       if ((event.text || "").trim()) append(agentBlock(event.text));
       break;
     case "step":
-      $("progress").textContent = "Шаг " + event.index + " / " + event.total;
+      runStats.step = event.index;
+      runStats.total = event.total;
+      renderProgress();
+      break;
+    case "step_end":
+      runStats.seconds += event.seconds || 0;
+      runStats.tokens += (event.tokens_in || 0) + (event.tokens_out || 0);
+      renderProgress();
       break;
     case "tool_start": {
       const step = { call_id: event.call_id, name: event.name, args: event.args, done: false };
@@ -805,8 +914,10 @@ function render(event) {
         const spinner = row.querySelector(".spin");
         if (spinner) spinner.remove();
         row.classList.toggle("failed", Boolean(event.failed));
+        if (event.seconds) row.appendChild(element("span", "secs", event.seconds + " с"));
         row.appendChild(element("span", "icon", event.failed ? "✕" : "✓"));
       }
+      if (event.failed && event.diagnosis) append(errorCard(event.diagnosis));
       if ($("follow").checked) select(steps.length - 1); else renderTimeline();
       if (step.name === "str_replace_editor" || step.name === "python_execute") loadFiles();
       break;
@@ -819,7 +930,10 @@ function render(event) {
     case "result": {
       const done = element("div", "card result");
       done.appendChild(element("h4", null, "Задача завершена"));
-      done.appendChild(element("div", "text", "Агент выполнил шагов: " + steps.length));
+      done.appendChild(element("div", "text",
+        "Агент выполнил " + plural(steps.length, "шаг", "шага", "шагов") +
+        (runStats.seconds >= 1 ? " за " + Math.round(runStats.seconds) + " с" : "") +
+        (runStats.tokens ? ", израсходовано " + (runStats.tokens / 1000).toFixed(1) + "k токенов" : "")));
       const details = document.createElement("details");
       details.appendChild(element("summary", null, "Журнал шагов"));
       details.appendChild(element("pre", "block out", event.message));
@@ -830,13 +944,34 @@ function render(event) {
       break;
     }
     case "error":
-      append(card("error", "Ошибка", event.message));
+      append(errorCard(event));
+      break;
+    case "warning":
+      append(warningCard(event));
       break;
     case "llm":
       exchanges.push(event.exchange);
       if (exchanges.length > 40) exchanges.shift();
       if (tab === "model") renderView();
       break;
+    case "notice": {
+      // repeated identical warnings (retries) collapse into one line with a counter
+      const last = stack.lastElementChild;
+      if (last && last.classList.contains("notice") && last.dataset.msg === event.message) {
+        const count = Number(last.dataset.count || "1") + 1;
+        last.dataset.count = count;
+        last.querySelector(".times").textContent = " ×" + count;
+        break;
+      }
+      const line = element("div", "notice " + event.level);
+      line.dataset.msg = event.message;
+      line.appendChild(element("span", "mark", event.level === "WARNING" ? "⚠" : "✕"));
+      line.appendChild(element("span", "src", event.name || ""));
+      line.appendChild(element("span", "msg", event.message));
+      line.appendChild(element("span", "times", ""));
+      append(line);
+      break;
+    }
     case "log":
       logs.push(event.level.padEnd(8) + " " + event.message);
       if (tab === "logs") renderView();
@@ -869,6 +1004,8 @@ function connect(sessionId) {
   if (source) source.close();
   renderEmpty();
   steps = []; activeStep = -1; logs = []; exchanges = []; preview = null; timeline.innerHTML = "";
+  runStats = { step: 0, total: 0, seconds: 0, tokens: 0 };
+  $("progress").textContent = "";
   renderView();
   source = new EventSource("/api/sessions/" + sessionId + "/events");
   source.onmessage = (message) => render(JSON.parse(message.data));

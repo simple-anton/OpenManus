@@ -198,7 +198,18 @@ Three things extend what the agent can do, all from the same dialog:
   unloaded.
 - **Custom APIs** - describe an HTTP endpoint (address, method, headers,
   parameters) in `config/api_tools.json` and the agent gets it as a regular tool;
-  a Test button calls it once and shows the response. Use `--host` / `--port`
+  a Test button calls it once and shows the response.
+
+When something goes wrong the interface says whose fault it is. `app/web/
+diagnostics.py` unwraps the exception (retries hide the real one), decides
+whether the model, a tool, the configuration or the environment failed, and
+renders that as a card with the reason, what to do about it and the traceback
+behind a fold. Warnings and errors logged during a run also appear inline, so a
+stalled run is visible while it happens rather than after it ends. A Check tab
+runs the same questions on demand - config present, model answering, MCP servers
+up, workspace writable - and a cheap preflight request before each run turns a
+wrong key or a stopped model server into an immediate answer instead of minutes
+of silent retries. Use `--host` / `--port`
 (or the `OPENMANUS_HOST` / `OPENMANUS_PORT` environment variables) to change
 the bind address.
 

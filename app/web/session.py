@@ -19,7 +19,7 @@ from app.logger import logger
 from app.prompt.manus import SYSTEM_PROMPT
 from app.schema import Message
 from app.tool.base import BaseTool
-from app.web import api_tools
+from app.web import api_tools, diagnostics
 from app.web import skills as skills_store
 from app.web.agent import WebManus, create_data_analysis_agent
 
@@ -94,9 +94,15 @@ class Session:
 
         # each task gets its own folder so files from different runs do not mix
         self.workspace = WORKSPACE / f"task_{session_id}"
-        self.workspace.mkdir(parents=True, exist_ok=True)
         self.store = STORE / session_id
-        self.store.mkdir(parents=True, exist_ok=True)
+        try:
+            self.workspace.mkdir(parents=True, exist_ok=True)
+            self.store.mkdir(parents=True, exist_ok=True)
+        except OSError as exc:
+            raise RuntimeError(
+                f"Не удалось создать папку задачи в {WORKSPACE}: {exc}. "
+                "Проверьте монтирование ./workspace в docker-compose.yml."
+            ) from exc
         self._save_meta()
 
     # ------------------------------------------------------------- persistence
@@ -252,9 +258,22 @@ class Session:
                 self._attach_web_tools(agent)
                 self._carry_memory(agent)
                 self.agent = agent
+                self._report_mcp(agent)
             self.agent.max_steps = self.max_steps
             self.apply_prompt()
             return self.agent
+
+    def _report_mcp(self, agent: WebManus) -> None:
+        """Say which configured plugins did not come up, instead of hiding it in logs."""
+        configured = set(config.mcp_config.servers)
+        missing = sorted(configured - set(agent.connected_servers))
+        if missing:
+            self.publish(
+                "warning",
+                message="Не подключились плагины: " + ", ".join(missing),
+                advice="Настройки → Плагины: проверьте команду и переменные сервера. "
+                "Подробности — во вкладке «Логи».",
+            )
 
     def apply_prompt(self) -> None:
         """Point the agent at this task's folder and its attached skills."""
@@ -375,6 +394,12 @@ class Session:
         self.publish("status", state="running")
         try:
             with logger.contextualize(web_session=self.id):
+                problem = await diagnostics.preflight()
+                if problem is not None:
+                    self.publish("error", **problem)
+                    self.state = "idle"
+                    self.publish("status", state="idle")
+                    return
                 if mode == "chat":
                     await self._chat(prompt)
                 elif mode == "flow":
@@ -392,7 +417,16 @@ class Session:
             raise
         except Exception as exc:  # surfaced in the UI instead of only in stderr
             logger.exception(f"Web session {self.id} failed: {exc}")
-            self.publish("error", message=f"{type(exc).__name__}: {exc}")
+            try:
+                self.publish("error", **diagnostics.explain(exc))
+            except Exception as reporting_error:  # the report must never be silent
+                logger.exception(f"Failed to report the failure: {reporting_error}")
+                self.publish(
+                    "error",
+                    source="OpenManus",
+                    title=f"{type(exc).__name__}: {exc}",
+                    why="Разбор ошибки сам дал сбой, подробности — во вкладке «Логи».",
+                )
             self.state = "idle"
             self.publish("status", state="idle")
         finally:

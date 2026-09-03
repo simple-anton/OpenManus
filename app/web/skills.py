@@ -114,6 +114,8 @@ def prompt_for(slugs: List[str]) -> str:
 def _raw_candidates(url: str) -> List[str]:
     """Turn a GitHub page URL into candidate raw URLs for a SKILL.md."""
     url = url.strip().rstrip("/")
+    if not url.startswith(("http://", "https://")):
+        raise ValueError("Ссылка должна начинаться с http:// или https://")
     if url.startswith(RAW_HOST) or url.endswith(".md"):
         return [url]
 

@@ -7,11 +7,13 @@ agent's work the way the hosted Manus does.
 """
 
 import json
+import time
 from functools import lru_cache
 from typing import Any, Dict, List, Optional
 
 from app.agent.manus import Manus
 from app.schema import ToolCall
+from app.web import diagnostics
 
 
 # tool output shown in the UI; the agent itself still sees max_observe chars
@@ -40,10 +42,23 @@ class WebAgentMixin:
     session: Any = None
 
     async def step(self) -> str:
+        started = time.monotonic()
+        before_in = self.llm.total_input_tokens
+        before_out = self.llm.total_completion_tokens
         self.session.publish(
             "step", index=self.current_step, total=self.max_steps, agent=self.name
         )
-        return await super().step()
+        try:
+            return await super().step()
+        finally:
+            # what this step cost, so the run is legible afterwards
+            self.session.publish(
+                "step_end",
+                index=self.current_step,
+                seconds=round(time.monotonic() - started, 1),
+                tokens_in=self.llm.total_input_tokens - before_in,
+                tokens_out=self.llm.total_completion_tokens - before_out,
+            )
 
     async def think(self) -> bool:
         should_act = await super().think()
@@ -67,7 +82,9 @@ class WebAgentMixin:
         args = _parse_args(command)
         self.session.publish("tool_start", call_id=command.id, name=name, args=args)
 
+        started = time.monotonic()
         result = await super().execute_tool(command)
+        failed = _looks_failed(result)
 
         self.session.publish(
             "tool_end",
@@ -77,7 +94,9 @@ class WebAgentMixin:
             output=result[:MAX_OUTPUT_CHARS],
             truncated=len(result) > MAX_OUTPUT_CHARS,
             image=self._current_base64_image,
-            failed=_looks_failed(result),
+            failed=failed,
+            seconds=round(time.monotonic() - started, 1),
+            diagnosis=diagnostics.tool_failure(name, result) if failed else None,
         )
         return result
 
