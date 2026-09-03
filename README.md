@@ -173,8 +173,11 @@ run and shows the terminal for `python_execute`, the file for
 browser tools. Every tool call becomes a step you can click to replay what
 happened at that point. There is an agent mode (the full tool loop) and a chat
 mode (a direct answer, no tools), the agent's `ask_human` questions are
-answered in the same composer, messages sent mid-run are queued, and files the
-agent produces can be downloaded from the Files tab. Use `--host` / `--port`
+answered in the same composer, and messages sent mid-run are queued. Each task
+works in its own `workspace/task_<id>` folder, so runs do not mix files; the
+Files tab lists that folder and previews text and images in place. A Model tab
+shows the last exchange with the LLM, which is where to look when a local model
+starts ignoring its tools. Use `--host` / `--port`
 (or the `OPENMANUS_HOST` / `OPENMANUS_PORT` environment variables) to change
 the bind address.
 

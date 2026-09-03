@@ -8,9 +8,12 @@ import asyncio
 import threading
 import time
 from collections import deque
+from pathlib import Path
 from typing import Any, AsyncIterator, Dict, List, Optional, Set
 
+from app.config import config
 from app.logger import logger
+from app.prompt.manus import SYSTEM_PROMPT
 from app.schema import Message
 from app.tool.base import BaseTool
 from app.web.agent import WebManus
@@ -66,6 +69,10 @@ class Session:
         self._agent_lock = asyncio.Lock()
         self._loop = asyncio.get_event_loop()
         self._thread_id = threading.get_ident()
+
+        # each task gets its own folder so files from different runs do not mix
+        self.workspace = Path(config.workspace_root) / f"task_{session_id}"
+        self.workspace.mkdir(parents=True, exist_ok=True)
 
     # ------------------------------------------------------------------ events
 
@@ -126,6 +133,8 @@ class Session:
         async with self._agent_lock:
             if self.agent is None:
                 agent = await WebManus.create(session=self)
+                # point the agent at this task's folder, not the shared workspace
+                agent.system_prompt = SYSTEM_PROMPT.format(directory=self.workspace)
                 self._attach_web_tools(agent)
                 self.agent = agent
             return self.agent
@@ -254,6 +263,10 @@ class Session:
 
     async def cleanup(self) -> None:
         await self.stop()
+        try:  # do not leave empty task folders behind
+            self.workspace.rmdir()
+        except OSError:
+            pass
         if self.agent is not None:
             try:
                 await self.agent.cleanup()
@@ -269,5 +282,6 @@ class Session:
             "created_at": self.created_at,
             "pending_question": self.pending_question,
             "queued": len(self._queued),
+            "workspace": str(self.workspace),
             "tools": self.tools(),
         }

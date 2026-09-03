@@ -7,7 +7,7 @@ agent's work the way the hosted Manus does.
 """
 
 import json
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 
 from app.agent.manus import Manus
 from app.schema import ToolCall
@@ -15,6 +15,9 @@ from app.schema import ToolCall
 
 # tool output shown in the UI; the agent itself still sees max_observe chars
 MAX_OUTPUT_CHARS = 20000
+# how much of the conversation with the model the Model tab shows
+EXCHANGE_MESSAGES = 8
+MAX_EXCHANGE_CHARS = 4000
 
 
 def _parse_args(command: ToolCall) -> Dict[str, Any]:
@@ -42,6 +45,7 @@ class WebManus(Manus):
     async def think(self) -> bool:
         should_act = await super().think()
 
+        self.session.publish("llm", exchange=self._exchange())
         thought = self._last_assistant_content()
         if thought:
             self.session.publish("thought", text=thought)
@@ -74,6 +78,19 @@ class WebManus(Manus):
             failed=_looks_failed(result),
         )
         return result
+
+    def _exchange(self) -> List[Dict[str, Any]]:
+        """The tail of what the model just saw and answered, for the Model tab."""
+        exchange = []
+        for message in self.memory.messages[-EXCHANGE_MESSAGES:]:
+            entry = {
+                "role": message.role,
+                "content": (message.content or "")[:MAX_EXCHANGE_CHARS],
+            }
+            if message.tool_calls:
+                entry["tools"] = [call.function.name for call in message.tool_calls]
+            exchange.append(entry)
+        return exchange
 
     def _last_assistant_content(self) -> Optional[str]:
         for message in reversed(self.memory.messages):

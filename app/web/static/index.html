@@ -115,6 +115,8 @@
   .files a { display: flex; justify-content: space-between; gap: 10px; padding: 8px 9px; border-radius: 8px; color: var(--ink); text-decoration: none; font-size: 12.5px; }
   .files a:hover { background: #f2efe9; }
   .files small { color: var(--muted); flex: none; }
+  .viewhead a { color: var(--accent); font-size: 12px; margin-left: auto; }
+  .viewhead button { padding: 3px 8px; font-size: 12px; }
   #timeline { border-top: 1px solid var(--line); padding: 8px 10px; display: flex; gap: 6px; overflow-x: auto; align-items: center; min-height: 42px; }
   #timeline .step { flex: none; padding: 5px 9px; border: 1px solid var(--line); border-radius: 7px; font-size: 11.5px; cursor: pointer; color: var(--muted); background: var(--panel); white-space: nowrap; }
   #timeline .step.on { border-color: var(--accent); color: var(--accent); background: var(--accent-soft); }
@@ -175,6 +177,7 @@
     <button data-tab="editor">Редактор</button>
     <button data-tab="browser">Браузер</button>
     <button data-tab="files">Файлы</button>
+    <button data-tab="model">Модель</button>
     <button data-tab="logs">Логи</button>
   </div>
   <div id="view"><div class="placeholder">Здесь появится то,<br />что делает агент</div></div>
@@ -187,6 +190,7 @@ const feed = $("feed"), stack = $("stack"), view = $("view"), timeline = $("time
 
 let currentId = null, source = null, mode = "agent";
 let steps = [], activeStep = -1, tab = "terminal", logs = [], files = [];
+let exchanges = [], preview = null;
 
 const ICONS = {
   python_execute: "\u{1F40D}", str_replace_editor: "\u{1F4DD}", ask_human: "\u{1F4AC}",
@@ -317,6 +321,7 @@ function imageSrc(data) {
 function renderView() {
   view.innerHTML = "";
   if (tab === "files") return renderFiles();
+  if (tab === "model") return renderModel();
   if (tab === "logs") {
     view.appendChild(element("pre", "block out", logs.slice(-400).join("\n") || "Пока пусто"));
     return;
@@ -378,24 +383,82 @@ function renderTimeline() {
   if (active) active.scrollIntoView({ inline: "nearest", block: "nearest" });
 }
 
+function fileUrl(endpoint, path) {
+  return "/api/workspace/" + endpoint + "?path=" + encodeURIComponent(path) +
+    (currentId ? "&session=" + currentId : "");
+}
+
 function renderFiles() {
+  if (preview) return renderPreview();
   const box = element("div", "files");
   if (!files.length) box.appendChild(element("div", "placeholder", "Файлов пока нет"));
   files.forEach((file) => {
-    const link = document.createElement("a");
-    link.href = "/api/workspace/file?path=" + encodeURIComponent(file.path);
-    link.target = "_blank";
-    link.appendChild(element("span", null, file.path));
-    link.appendChild(element("small", null, (file.size / 1024).toFixed(1) + " КБ"));
-    box.appendChild(link);
+    const row = document.createElement("a");
+    row.href = "#";
+    row.onclick = (event) => { event.preventDefault(); openPreview(file.path); };
+    row.appendChild(element("span", null, file.path));
+    row.appendChild(element("small", null, (file.size / 1024).toFixed(1) + " КБ"));
+    box.appendChild(row);
   });
   view.appendChild(box);
 }
 
+async function openPreview(path) {
+  try {
+    preview = { path: path, ...(await api(fileUrl("preview", path))) };
+  } catch (error) {
+    preview = { path: path, kind: "error", content: error.message };
+  }
+  setTab("files");
+}
+
+function renderPreview() {
+  const head = element("div", "viewhead");
+  const back = element("button", "ghost", "← к списку");
+  back.onclick = () => { preview = null; renderView(); };
+  head.appendChild(back);
+  head.appendChild(element("span", "path", preview.path));
+  const download = document.createElement("a");
+  download.href = fileUrl("file", preview.path);
+  download.target = "_blank";
+  download.textContent = "скачать";
+  head.appendChild(download);
+  view.appendChild(head);
+
+  if (preview.kind === "image") {
+    const img = document.createElement("img");
+    img.className = "shot";
+    img.src = preview.data_url;
+    view.appendChild(img);
+  } else if (preview.kind === "text") {
+    view.appendChild(element("pre", "block out", preview.content));
+    if (preview.truncated) view.appendChild(element("div", "placeholder", "Показано начало файла"));
+  } else if (preview.kind === "error") {
+    view.appendChild(element("pre", "block out", preview.content));
+  } else {
+    view.appendChild(element("div", "placeholder", "Двоичный файл — его можно только скачать"));
+  }
+}
+
+function renderModel() {
+  if (!exchanges.length) {
+    view.innerHTML = '<div class="placeholder">Здесь будет видно,<br />что уходит в модель и что она отвечает</div>';
+    return;
+  }
+  const last = exchanges[exchanges.length - 1];
+  view.appendChild(element("div", "viewhead", "Последний обмен с моделью, всего обменов: " + exchanges.length));
+  last.forEach((message) => {
+    const label = element("div", "viewhead", message.role + (message.tools ? " → " + message.tools.join(", ") : ""));
+    view.appendChild(label);
+    view.appendChild(element("pre", message.role === "assistant" ? "block" : "block out",
+      message.content || "(пусто)"));
+  });
+}
+
 async function loadFiles() {
-  const data = await api("/api/workspace");
+  const data = await api("/api/workspace" + (currentId ? "?session=" + currentId : ""));
   files = data.files;
-  if (tab === "files") renderView();
+  if (tab === "files" && !preview) renderView();
 }
 
 /* ------------------------------------------------------------ events */
@@ -468,6 +531,11 @@ function render(event) {
     case "error":
       append(card("error", "Ошибка", event.message));
       break;
+    case "llm":
+      exchanges.push(event.exchange);
+      if (exchanges.length > 40) exchanges.shift();
+      if (tab === "model") renderView();
+      break;
     case "log":
       logs.push(event.level.padEnd(8) + " " + event.message);
       if (tab === "logs") renderView();
@@ -483,7 +551,7 @@ function render(event) {
 function connect(sessionId) {
   if (source) source.close();
   stack.innerHTML = "";
-  steps = []; activeStep = -1; logs = []; timeline.innerHTML = "";
+  steps = []; activeStep = -1; logs = []; exchanges = []; preview = null; timeline.innerHTML = "";
   renderView();
   source = new EventSource("/api/sessions/" + sessionId + "/events");
   source.onmessage = (message) => render(JSON.parse(message.data));
@@ -497,6 +565,7 @@ async function selectTask(sessionId) {
   setState(info.state);
   connect(sessionId);
   await loadTasks();
+  await loadFiles();
 }
 
 async function loadTasks() {
