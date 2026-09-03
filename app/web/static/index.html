@@ -138,7 +138,7 @@
   .chips button:hover { background: var(--panel); }
 
   .picker { position: relative; }
-  .menu { display: none; position: absolute; right: 0; top: 34px; z-index: 15; width: 320px; max-height: 320px; overflow-y: auto;
+  .menu { display: none; position: absolute; right: 0; top: 34px; z-index: 15; width: 320px; max-height: 400px; overflow-y: auto;
           background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 8px; box-shadow: 0 8px 24px rgba(30,28,25,.14); }
   .menu.open { display: block; }
   .menu.up { top: auto; bottom: 40px; }
@@ -147,6 +147,13 @@
   .menu label span { flex: 1; }
   .menu label small { display: block; color: var(--muted); font-size: 11.5px; line-height: 1.4; }
   .menu .note { color: var(--muted); font-size: 12px; padding: 8px; line-height: 1.5; }
+  .menu-search { width: 100%; margin: 2px 0 6px; padding: 6px 9px; border: 1px solid var(--line); border-radius: 8px;
+                 background: #fff; outline: none; font-size: 13px; }
+  .menu-search:focus { border-color: #cfcbc1; }
+  .menu-list { max-height: 232px; overflow-y: auto; }
+  .menu-foot { display: flex; gap: 6px; margin-top: 6px; padding-top: 6px; border-top: 1px solid var(--line); }
+  .menu-foot button { font-size: 12px; padding: 5px 9px; color: var(--muted); }
+  .menu-foot button:hover { color: inherit; background: #f2efe9; }
 
   /* right panel */
   #computer { width: 46%; min-width: 360px; max-width: 680px; flex: none; display: flex; flex-direction: column; background: var(--panel); border-left: 1px solid var(--line); }
@@ -446,6 +453,8 @@ let steps = [], activeStep = -1, tab = "terminal", logs = [], files = [];
 let exchanges = [], preview = null, sessionInfo = null, appConfig = null;
 let settings = null, mcp = null, models = [], dialogSection = "llm";
 let skillList = [], skillCatalogue = [], apiTools = [], catalogueQuery = "";
+let skillFilter = "";              // search inside the skills picker
+const SEARCH_FROM = 6;             // below this the search field is just noise
 let storeData = null, storeQuery = "", storeTask = "", storePicks = null;
 let presets = [];
 
@@ -1109,7 +1118,7 @@ const SECTIONS = [
   { id: "runflow", label: "Планировщик", note:
     "Что подключается в режиме «План». Агент анализа данных умеет строить графики и делать отчёты по таблицам." },
   { id: "skills", label: "Навыки", note:
-    "Ваши методички: как выполнять задачи определённого типа. Выбираются для конкретной задачи кнопкой «Навыки» наверху." },
+    "Ваши методички: как выполнять задачи определённого типа. Для конкретной задачи они подключаются кнопкой \u{1F9E9} у поля ввода — подключённые видны там же плашками." },
   { id: "presets", label: "Быстрые задачи", note:
     "Кнопки под полем ввода. Каждая подставляет заготовку текста, выставляет режим и подключает нужные навыки — отправку вы делаете сами." },
   { id: "store", label: "Магазин навыков", note:
@@ -2382,25 +2391,59 @@ function renderSkillsMenu(menu) {
     menu.appendChild(element("div", "note",
       "Навык — это ваша методичка: как выполнять задачу такого типа. " +
       "Отмеченные здесь навыки агент получает вместе с задачей и следует им. " +
-      "Создать или импортировать: Настройки → Навыки."));
+      "Пока ни одного нет — добавьте свой или возьмите готовый в магазине."));
+    menu.appendChild(skillsMenuFooter());
     return;
   }
   menu.appendChild(element("div", "note",
-    "Отметьте методички, которым агент должен следовать в этой задаче. " +
-    "Новые навыки добавляются в Настройках → Навыки."));
+    "Отметьте методички, которым агент должен следовать в этой задаче."));
+
+  const list = element("div", "menu-list");
+  if (skillList.length > SEARCH_FROM) {
+    const search = element("input", "menu-search");
+    search.type = "search";
+    search.placeholder = "Поиск по навыкам";
+    search.value = skillFilter;
+    search.oninput = () => { skillFilter = search.value; fillSkillsList(list, menu); };
+    menu.appendChild(search);
+  }
+  menu.appendChild(list);
+  fillSkillsList(list, menu);
+  menu.appendChild(skillsMenuFooter());
+}
+
+function fillSkillsList(list, menu) {
+  list.innerHTML = "";
+  const query = skillFilter.trim().toLowerCase();
   const attached = (sessionInfo && sessionInfo.skills) || [];
-  skillList.forEach((skill) => {
+  const shown = skillList.filter((skill) => !query ||
+    (skill.name + " " + (skill.description || "") + " " + skill.slug).toLowerCase().includes(query));
+  if (!shown.length) {
+    list.appendChild(element("div", "note", "Ничего не нашлось. Готовые навыки — в магазине ниже."));
+    return;
+  }
+  shown.forEach((skill) => {
     const label = document.createElement("label");
     const check = document.createElement("input");
     check.type = "checkbox";
     check.checked = attached.includes(skill.slug);
+    // the set comes from the task, not from the ticks on screen: search hides
+    // some of them, and a hidden skill must stay attached
     check.onchange = async () => {
-      const chosen = Array.from(menu.querySelectorAll("input:checked"))
-        .map((input) => input.dataset.slug);
-      sessionInfo = await api("/api/sessions/" + currentId, {
-        method: "PATCH", body: JSON.stringify({ skills: chosen }),
-      });
+      const chosen = new Set((sessionInfo && sessionInfo.skills) || []);
+      if (check.checked) chosen.add(skill.slug);
+      else chosen.delete(skill.slug);
+      try {
+        sessionInfo = await api("/api/sessions/" + currentId, {
+          method: "PATCH", body: JSON.stringify({ skills: Array.from(chosen) }),
+        });
+      } catch (error) {
+        check.checked = !check.checked;
+        append(card("error", "Навыки не подключились", error.message));
+        return;
+      }
       renderSkillsButton();
+      // the other picker is closed; rebuild it so it opens up to date
       renderSkillsMenu(menu === $("skills-menu") ? $("skills-menu-composer") : $("skills-menu"));
     };
     check.dataset.slug = skill.slug;
@@ -2410,8 +2453,23 @@ function renderSkillsMenu(menu) {
     }
     if (skill.description) text.appendChild(element("small", null, skill.description));
     label.append(check, text);
-    menu.appendChild(label);
+    list.appendChild(label);
   });
+}
+
+/* the same two ways out as in Manus: add your own, or go shopping */
+function skillsMenuFooter() {
+  const foot = element("div", "menu-foot");
+  const add = element("button", "ghost", "＋ Свой навык");
+  add.type = "button";
+  add.title = "Настройки → Навыки: написать методичку самому или загрузить файлом";
+  add.onclick = () => { closeSkillMenus(); dialogSection = "skills"; openSettings(); };
+  const store = element("button", "ghost", "Магазин навыков");
+  store.type = "button";
+  store.title = "Готовые навыки с GitHub: описание, поиск и установка одной кнопкой";
+  store.onclick = () => { closeSkillMenus(); dialogSection = "store"; openSettings(); };
+  foot.append(add, store);
+  return foot;
 }
 
 async function openSkillsMenu(menuId) {
@@ -2421,10 +2479,13 @@ async function openSkillsMenu(menuId) {
   }
   await refreshSkills();
   const menu = $(menuId);
+  skillFilter = "";
   renderSkillsMenu(menu);
   const wasOpen = menu.classList.contains("open");
   closeSkillMenus();
   menu.classList.toggle("open", !wasOpen);
+  const search = menu.querySelector(".menu-search");
+  if (search && !wasOpen) search.focus();
 }
 
 function closeSkillMenus() {
@@ -2437,6 +2498,10 @@ $("skills-chip").onclick = () => openSkillsMenu("skills-menu-composer");
 
 document.addEventListener("click", (event) => {
   if (!event.target.closest(".picker")) closeSkillMenus();
+});
+
+document.addEventListener("keydown", (event) => {
+  if (event.key === "Escape") closeSkillMenus();
 });
 
 $("skill-file").onchange = async (event) => {
