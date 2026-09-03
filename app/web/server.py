@@ -20,6 +20,7 @@ from app.web import api_tools as api_tools_store
 from app.web import diagnostics
 from app.web import settings as settings_store
 from app.web import skills as skills_store
+from app.web import store as store_catalogue
 from app.web.session import Session
 
 
@@ -58,6 +59,14 @@ class SkillRequest(BaseModel):
 class ImportRequest(BaseModel):
     url: str
     force: bool = False
+
+
+class StoreSourcesRequest(BaseModel):
+    sources: List[str]
+
+
+class RecommendRequest(BaseModel):
+    task: str
 
 
 class ApiToolsRequest(BaseModel):
@@ -499,6 +508,36 @@ def create_app() -> FastAPI:
             raise HTTPException(status_code=409, detail=_incompatible(exc))
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc))
+
+    # ------------------------------------------------------------------- store
+
+    @app.get("/api/store")
+    async def read_store(query: str = "", refresh: bool = False) -> Dict[str, Any]:
+        data = await store_catalogue.catalogue(force=refresh)
+        skills = data.get("skills", [])
+        return {
+            "skills": store_catalogue.filter_skills(skills, query) if query else skills,
+            "total": len(skills),
+            "updated": data.get("updated", 0),
+            "errors": data.get("errors", []),
+            "sources": store_catalogue.read_sources(),
+            "authorised": bool(store_catalogue.token_value()),
+        }
+
+    @app.post("/api/store/sources")
+    async def write_store_sources(request: StoreSourcesRequest) -> Dict[str, Any]:
+        try:
+            store_catalogue.write_sources(request.sources)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc))
+        return await store_catalogue.refresh()
+
+    @app.post("/api/store/recommend")
+    async def recommend_skills(request: RecommendRequest) -> Dict[str, Any]:
+        task = request.task.strip()
+        if not task:
+            raise HTTPException(status_code=400, detail="Опишите задачу")
+        return await store_catalogue.recommend(task)
 
     # -------------------------------------------------------------- api tools
 

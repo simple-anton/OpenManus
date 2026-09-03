@@ -161,6 +161,9 @@
   .compat.partial { background: #fbf0d2; color: #8a6212; }
   .compat.blocking { background: #f7dcdc; color: #8f2b2b; }
   .toolcard .fix { color: #8a6212; font-size: 12px; line-height: 1.5; margin-top: 6px; }
+  .toolcard .why { color: var(--ink); font-size: 12.5px; line-height: 1.5; margin: 4px 0 6px; }
+  .storemeta { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 7px; color: var(--muted); font-size: 11.5px; }
+  .storemeta a { color: var(--accent); }
   .toolcard div { color: var(--muted); font-size: 12px; margin-top: 3px; line-height: 1.5; }
   #timeline { border-top: 1px solid var(--line); padding: 8px 10px; display: flex; gap: 6px; overflow-x: auto; align-items: center; min-height: 42px; }
   #timeline .step { flex: none; padding: 5px 9px; border: 1px solid var(--line); border-radius: 7px; font-size: 11.5px; cursor: pointer; color: var(--muted); background: var(--panel); white-space: nowrap; }
@@ -204,7 +207,9 @@
   .field .note { color: var(--muted); font-size: 11.5px; margin-top: 4px; line-height: 1.5; }
   .field.row-check { align-items: center; }
   .field.row-check input { width: 16px; height: 16px; }
-  .section-title { font-size: 12px; text-transform: uppercase; letter-spacing: .7px; color: var(--muted); margin: 4px 0 12px; }
+  .section-title { font-size: 12px; text-transform: uppercase; letter-spacing: .7px; color: var(--muted);
+                   margin: 24px 0 12px; padding-top: 14px; border-top: 1px solid var(--line); }
+  .dialog-form > .section-title:first-child { margin-top: 4px; padding-top: 0; border-top: 0; }
   #dialog > footer { display: flex; align-items: center; gap: 10px; padding: 12px 18px; border-top: 1px solid var(--line); }
   #dialog-status { flex: 1; font-size: 12.5px; color: var(--muted); }
   #dialog-status.ok { color: var(--green); }
@@ -417,6 +422,7 @@ let steps = [], activeStep = -1, tab = "terminal", logs = [], files = [];
 let exchanges = [], preview = null, sessionInfo = null, appConfig = null;
 let settings = null, mcp = null, models = [], dialogSection = "llm";
 let skillList = [], skillCatalogue = [], apiTools = [], catalogueQuery = "";
+let storeData = null, storeQuery = "", storeTask = "", storePicks = null;
 
 const ICONS = {
   python_execute: "\u{1F40D}", str_replace_editor: "\u{1F4DD}", ask_human: "\u{1F4AC}",
@@ -1079,6 +1085,8 @@ const SECTIONS = [
     "Что подключается в режиме «План». Агент анализа данных умеет строить графики и делать отчёты по таблицам." },
   { id: "skills", label: "Навыки", note:
     "Ваши методички: как выполнять задачи определённого типа. Выбираются для конкретной задачи кнопкой «Навыки» наверху." },
+  { id: "store", label: "Магазин навыков", note:
+    "Каталог навыков, опубликованных на GitHub. Можно искать по названию, попросить подобрать под задачу и установить в один клик." },
   { id: "mcp", label: "Плагины (MCP)", note:
     "Готовые наборы инструментов: загрузка страниц, работа с файлами, GitHub, Slack. Подключаются к агенту при следующем запуске задачи." },
   { id: "apitools", label: "Свои API", note:
@@ -1151,6 +1159,12 @@ const FIELDS = {
     { key: "timeout", label: "Таймаут команды, с", type: "number", note: "Через сколько секунд прервать зависшую команду." },
     { key: "network_enabled", label: "Доступ в сеть", type: "bool", note:
       "Разрешить коду в песочнице ходить в интернет. Выключено — безопаснее, но не поставить библиотеку и не скачать данные." },
+  ],
+  store: [
+    { key: "github_token", label: "Токен GitHub", type: "password", note:
+      "Не обязателен: каталог читается и без него, но GitHub ограничивает 60 запросами в час с одного адреса. " +
+      "Токен (Settings → Developer settings → Personal access tokens, без единого права доступа) поднимает лимит до 5000 и включает поиск по коду. " +
+      "Он хранится в вашем config.toml и никуда не отправляется, кроме самого GitHub." },
   ],
   runflow: [
     { key: "use_data_analysis_agent", label: "Агент анализа данных", type: "bool", note:
@@ -1245,6 +1259,7 @@ function renderDialog() {
   const form = $("dialog-form");
   form.innerHTML = "";
   $("save-settings").style.display = dialogSection === "skills" ? "none" : "";
+  if (dialogSection === "store") return renderStoreSection(form);
   if (dialogSection === "mcp") return renderMcpSection(form);
   if (dialogSection === "skills") return renderSkillsSection(form);
   if (dialogSection === "apitools") return renderApiToolsSection(form);
@@ -1274,6 +1289,162 @@ function renderTaskSection(form) {
   control.appendChild(element("div", "note", sessionInfo.workspace));
   info.appendChild(control);
   form.appendChild(info);
+}
+
+function renderStoreSection(form) {
+  form.appendChild(element("div", "section-title", "Магазин навыков"));
+  form.appendChild(element("div", "note",
+    "Навыки собираются из репозиториев GitHub: читается каждый SKILL.md, из него берутся название и описание. " +
+    "Устанавливаются вместе со своими файлами и проходят ту же проверку совместимости, что и загруженные вручную."));
+
+  (FIELDS.store || []).forEach((spec) => form.appendChild(buildField("store", spec)));
+
+  // ---- sources
+  form.appendChild(element("div", "section-title", "Источники"));
+  const sources = element("div", "sources");
+  ((storeData && storeData.sources) || []).forEach((repo) => sources.appendChild(sourceRow(repo)));
+  form.appendChild(sources);
+  const sourceButtons = element("div", "server-row");
+  const addSource = element("button", null, "Добавить репозиторий");
+  addSource.onclick = () => sources.appendChild(sourceRow(""));
+  const save = element("button", null, "Сохранить и обновить каталог");
+  save.onclick = async () => {
+    const list = Array.from(sources.querySelectorAll("input"))
+      .map((input) => input.value.trim()).filter(Boolean);
+    dialogStatus("Читаю репозитории…");
+    try {
+      storeData = await api("/api/store/sources", {
+        method: "POST", body: JSON.stringify({ sources: list }),
+      });
+      storeData.skills = storeData.skills || [];
+      await loadStore(true);
+      dialogStatus("Каталог обновлён: навыков " + (storeData.total || 0), "ok");
+    } catch (error) {
+      dialogStatus("Не удалось: " + error.message, "bad");
+    }
+  };
+  sourceButtons.append(addSource, save);
+  form.appendChild(sourceButtons);
+
+  if (storeData && storeData.errors && storeData.errors.length) {
+    form.appendChild(element("div", "fix", "Проблемы при чтении: " + storeData.errors.join("; ")));
+  }
+  if (storeData && !storeData.authorised) {
+    form.appendChild(element("div", "note",
+      "Сейчас GitHub читается без токена — это 60 запросов в час. Если каталог перестанет обновляться, добавьте токен выше."));
+  }
+
+  // ---- recommendation by task
+  form.appendChild(element("div", "section-title", "Подобрать под задачу"));
+  form.appendChild(element("div", "note",
+    "Опишите, что нужно сделать и что для вас важно. Ваша модель просмотрит каталог и предложит навыки с обоснованием."));
+  const task = document.createElement("textarea");
+  task.rows = 3;
+  task.placeholder = "Например: нужно каждую неделю разбирать отчёты конкурентов и собирать выводы в презентацию";
+  task.value = storeTask;
+  task.oninput = () => { storeTask = task.value; };
+  task.style.cssText = "width:100%;border:1px solid var(--line);border-radius:8px;padding:8px;margin-bottom:8px";
+  form.appendChild(task);
+  const ask = element("button", "primary", "Подобрать");
+  ask.onclick = async () => {
+    if (!storeTask.trim()) { dialogStatus("Сначала опишите задачу", "bad"); return; }
+    dialogStatus("Модель просматривает каталог…");
+    try {
+      storePicks = await api("/api/store/recommend", {
+        method: "POST", body: JSON.stringify({ task: storeTask }),
+      });
+      renderDialog();
+      dialogStatus(storePicks.note || "Готово: предложений " + storePicks.items.length,
+        storePicks.note ? "" : "ok");
+    } catch (error) {
+      dialogStatus("Не удалось: " + error.message, "bad");
+    }
+  };
+  form.appendChild(ask);
+
+  if (storePicks && storePicks.items && storePicks.items.length) {
+    form.appendChild(element("div", "section-title", "Предложения под вашу задачу"));
+    storePicks.items.forEach((item) => form.appendChild(storeCard(item, true)));
+  }
+
+  // ---- browse
+  form.appendChild(element("div", "section-title",
+    "Каталог" + (storeData ? " — навыков: " + (storeData.total || 0) : "")));
+  const search = document.createElement("input");
+  search.type = "text";
+  search.placeholder = "Поиск по названию и описанию";
+  search.value = storeQuery;
+  search.style.cssText = "width:100%;border:1px solid var(--line);border-radius:8px;padding:7px 10px;margin-bottom:10px";
+  search.oninput = () => {
+    storeQuery = search.value;
+    const query = storeQuery.trim().toLowerCase();
+    list.querySelectorAll(".toolcard").forEach((card) => {
+      card.hidden = Boolean(query) && !card.textContent.toLowerCase().includes(query);
+    });
+  };
+  form.appendChild(search);
+
+  const list = element("div", "cat");
+  const skills = (storeData && storeData.skills) || [];
+  if (!skills.length) {
+    list.appendChild(element("div", "note",
+      storeData ? "Каталог пуст — проверьте источники." : "Загружаю каталог…"));
+  }
+  skills.slice(0, 200).forEach((item) => list.appendChild(storeCard(item, false)));
+  form.appendChild(list);
+
+  if (!storeData) loadStore(false);
+}
+
+function sourceRow(repo) {
+  const row = element("div", "server-row");
+  const input = document.createElement("input");
+  input.className = "rest";
+  input.placeholder = "владелец/репозиторий";
+  input.value = repo;
+  const kill = element("button", "ghost", "✕");
+  kill.onclick = () => row.remove();
+  row.append(input, kill);
+  return row;
+}
+
+function storeCard(item, withReason) {
+  const box = element("div", "toolcard");
+  const head = element("div", "server-row");
+  head.appendChild(element("b", null, item.name));
+  const install = element("button", null, "Установить");
+  install.style.marginLeft = "auto";
+  install.onclick = () => importSkill((force) => api("/api/skills/import", {
+    method: "POST", body: JSON.stringify({ url: item.url, force: force }),
+  }));
+  head.appendChild(install);
+  box.appendChild(head);
+
+  if (withReason && item.why) box.appendChild(element("div", "why", item.why));
+  box.appendChild(element("div", null, (item.description || "без описания").slice(0, 300)));
+
+  const meta = element("div", "storemeta");
+  meta.appendChild(element("span", null, "★ " + (item.stars || 0)));
+  meta.appendChild(element("span", null, item.repo));
+  if (item.updated) meta.appendChild(element("span", null, "обновлён " + item.updated.slice(0, 10)));
+  if (item.has_scripts) meta.appendChild(element("span", null, "со скриптами"));
+  const link = document.createElement("a");
+  link.href = item.url;
+  link.target = "_blank";
+  link.rel = "noopener";
+  link.textContent = "исходник";
+  meta.appendChild(link);
+  box.appendChild(meta);
+  return box;
+}
+
+async function loadStore(force) {
+  try {
+    storeData = await api("/api/store" + (force ? "?refresh=true" : ""));
+    if (dialogSection === "store") renderDialog();
+  } catch (error) {
+    dialogStatus("Каталог не загрузился: " + error.message, "bad");
+  }
 }
 
 function renderMcpSection(form) {

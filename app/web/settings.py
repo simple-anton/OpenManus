@@ -30,7 +30,15 @@ MCP_PATH = PROJECT_ROOT / "config" / "mcp.json"
 LOG_DIR = PROJECT_ROOT / "logs"
 
 # sections the interface is allowed to write back
-EDITABLE_SECTIONS = ("llm", "browser", "search", "sandbox", "runflow", "daytona")
+EDITABLE_SECTIONS = (
+    "llm",
+    "browser",
+    "search",
+    "sandbox",
+    "runflow",
+    "daytona",
+    "store",
+)
 
 
 def _format(value: Any) -> str:

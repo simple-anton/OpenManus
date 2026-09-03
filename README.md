@@ -198,7 +198,15 @@ Three things extend what the agent can do, all from the same dialog:
   accepted and marked as needing setup, one that cannot run here at all - because
   its scripts call the runtime of the agent it came from - is refused with the
   reasons, and its text can still be taken on its own if you ask for it. The
-  status shows on the skill in the list and in the task picker. The dialog also lists verified public skills from Anthropic's open
+  status shows on the skill in the list and in the task picker.
+  A Store section browses skills published on GitHub: it reads every SKILL.md in
+  the repositories it is pointed at, caches what it finds, and installs a skill
+  with its folder in one click. Describe a task in plain language and the
+  configured model ranks the catalogue against it and explains each suggestion;
+  when the model's answer cannot be parsed the keyword match is shown instead,
+  labelled as such. GitHub is read without credentials - enough for browsing, but
+  limited to 60 requests an hour - and an optional personal access token in the
+  same section raises that. The dialog also lists verified public skills from Anthropic's open
   repository for one-click import. Attach the ones a task needs and their text is
   appended to the agent's system prompt.
 - **Plugins** - a catalogue of ready MCP servers (Python ones run through `uvx`,
