@@ -100,6 +100,16 @@
   textarea#prompt { flex: 1; resize: none; border: 0; outline: none; background: transparent; height: 24px; max-height: 180px; padding: 4px 0; line-height: 1.5; }
   .hint { max-width: 760px; margin: 6px auto 0; color: var(--muted); font-size: 11.5px; }
 
+  .picker { position: relative; }
+  .menu { display: none; position: absolute; right: 0; top: 34px; z-index: 15; width: 320px; max-height: 320px; overflow-y: auto;
+          background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 8px; box-shadow: 0 8px 24px rgba(30,28,25,.14); }
+  .menu.open { display: block; }
+  .menu label { display: flex; gap: 8px; align-items: flex-start; padding: 7px 8px; border-radius: 8px; cursor: pointer; }
+  .menu label:hover { background: #f2efe9; }
+  .menu label span { flex: 1; }
+  .menu label small { display: block; color: var(--muted); font-size: 11.5px; line-height: 1.4; }
+  .menu .note { color: var(--muted); font-size: 12px; padding: 8px; line-height: 1.5; }
+
   /* right panel */
   #computer { width: 46%; min-width: 360px; max-width: 680px; flex: none; display: flex; flex-direction: column; background: var(--panel); border-left: 1px solid var(--line); }
   #computer.hidden { display: none; }
@@ -183,6 +193,10 @@
       <button id="mode-flow" title="Сначала план, потом выполнение по шагам">План</button>
       <button id="mode-chat" title="Ответ модели без инструментов">Чат</button>
     </div>
+    <div class="picker">
+      <button id="skills-button" title="Методички, которым следует агент">Навыки</button>
+      <div id="skills-menu" class="menu"></div>
+    </div>
     <span id="progress"></span>
     <button id="stop" disabled>Стоп</button>
     <button id="toggle-computer" class="ghost" title="Показать или скрыть панель">&#9707;</button>
@@ -207,6 +221,7 @@
     <div class="hint" id="hint">Enter — отправить, Shift+Enter — перенос строки</div>
   </form>
   <input type="file" id="file-input" multiple hidden />
+  <input type="file" id="skill-file" accept=".md,.txt" hidden />
 </main>
 
 <section id="computer">
@@ -254,6 +269,7 @@ let currentId = null, source = null, mode = "agent";
 let steps = [], activeStep = -1, tab = "terminal", logs = [], files = [];
 let exchanges = [], preview = null, sessionInfo = null, appConfig = null;
 let settings = null, mcp = null, models = [], dialogSection = "llm";
+let skillList = [], apiTools = [];
 
 const ICONS = {
   python_execute: "\u{1F40D}", str_replace_editor: "\u{1F4DD}", ask_human: "\u{1F4AC}",
@@ -723,6 +739,7 @@ async function selectTask(sessionId) {
   $("title").textContent = sessionInfo.title;
   setState(sessionInfo.state);
   connect(sessionId);
+  renderSkillsButton();
   await loadTasks();
   await loadFiles();
 }
@@ -760,7 +777,9 @@ const SECTIONS = [
   { id: "search", label: "Поиск" },
   { id: "sandbox", label: "Песочница" },
   { id: "runflow", label: "Планировщик" },
-  { id: "mcp", label: "MCP-серверы" },
+  { id: "skills", label: "Навыки" },
+  { id: "mcp", label: "Плагины (MCP)" },
+  { id: "apitools", label: "Свои API" },
   { id: "task", label: "Текущая задача" },
 ];
 
@@ -899,7 +918,10 @@ function renderDialog() {
 
   const form = $("dialog-form");
   form.innerHTML = "";
+  $("save-settings").style.display = dialogSection === "skills" ? "none" : "";
   if (dialogSection === "mcp") return renderMcpSection(form);
+  if (dialogSection === "skills") return renderSkillsSection(form);
+  if (dialogSection === "apitools") return renderApiToolsSection(form);
   if (dialogSection === "task") return renderTaskSection(form);
 
   form.appendChild(element("div", "section-title",
@@ -926,28 +948,88 @@ function renderTaskSection(form) {
 }
 
 function renderMcpSection(form) {
-  form.appendChild(element("div", "section-title", "MCP-серверы"));
-  form.appendChild(element("div", "note",
-    "Внешние наборы инструментов. Подключаются при следующем запуске задачи. " +
-    "Браузер (browser-use) подключается сам и здесь не указывается."));
+  form.appendChild(element("div", "section-title", "Плагины: наборы инструментов по MCP"));
+  if (mcp && !mcp.node) {
+    form.appendChild(element("div", "note",
+      "Node.js в контейнере нет — серверы, которые ставятся через npx, не запустятся. " +
+      "Питоновские (uvx) работают. Node добавляется в Dockerfile."));
+  }
 
+  form.appendChild(element("div", "section-title", "Готовые"));
+  const catalogue = element("div", "cat");
+  ((mcp && mcp.catalogue) || []).forEach((item) => {
+    const installed = Boolean((mcp.servers || {})[item.id] || (mcp.disabled || {})[item.id]);
+    const box = element("div", "toolcard");
+    const head = element("div", "server-row");
+    head.appendChild(element("b", null, item.title));
+    const action = element("button", installed ? "ghost" : null, installed ? "уже добавлен" : "Добавить");
+    action.disabled = installed;
+    action.style.marginLeft = "auto";
+    action.onclick = () => {
+      mcp.servers = Object.assign({}, mcp.servers, { [item.id]: JSON.parse(JSON.stringify(item.server)) });
+      renderDialog();
+    };
+    head.appendChild(action);
+    box.appendChild(head);
+    box.appendChild(element("div", null, item.description +
+      (item.needs_node && !mcp.node ? " — нужен Node.js" : "")));
+    catalogue.appendChild(box);
+  });
+  form.appendChild(catalogue);
+
+  form.appendChild(element("div", "section-title", "Подключённые"));
   const box = element("div", "mcp-list");
-  const servers = (mcp && mcp.servers) || {};
-  Object.entries(servers).forEach(([id, server]) => box.appendChild(mcpRow(id, server)));
+  Object.entries((mcp && mcp.servers) || {}).forEach(([id, server]) => box.appendChild(mcpRow(id, server, true)));
+  Object.entries((mcp && mcp.disabled) || {}).forEach(([id, server]) => box.appendChild(mcpRow(id, server, false)));
+  if (!box.children.length) box.appendChild(element("div", "note", "Пока ничего не подключено"));
   form.appendChild(box);
 
-  const add = element("button", null, "Добавить сервер");
+  const add = element("button", null, "Добавить вручную");
   add.style.marginTop = "10px";
-  add.onclick = () => box.appendChild(mcpRow("", { type: "sse", url: "" }));
+  add.onclick = () => box.appendChild(mcpRow("", { type: "sse", url: "" }, true));
   form.appendChild(add);
+
+  form.appendChild(element("div", "section-title", "Импорт JSON"));
+  form.appendChild(element("div", "note",
+    'Вставьте фрагмент вида {"mcpServers": {"имя": {"command": "npx", "args": [...]}}} — из документации сервера.'));
+  const area = document.createElement("textarea");
+  area.id = "mcp-json";
+  area.rows = 5;
+  area.style.cssText = "width:100%;border:1px solid var(--line);border-radius:8px;padding:8px;margin-top:8px";
+  form.appendChild(area);
+  const importButton = element("button", null, "Импортировать");
+  importButton.style.marginTop = "8px";
+  importButton.onclick = () => {
+    try {
+      const parsed = JSON.parse(area.value);
+      const incoming = parsed.mcpServers || parsed;
+      Object.entries(incoming).forEach(([id, server]) => {
+        if (!server.type) server.type = server.url ? "sse" : "stdio";
+      });
+      mcp.servers = Object.assign({}, mcp.servers, incoming);
+      renderDialog();
+      dialogStatus("Добавлено серверов: " + Object.keys(incoming).length + ". Нажмите «Сохранить»", "ok");
+    } catch (error) {
+      dialogStatus("Не похоже на JSON: " + error.message, "bad");
+    }
+  };
+  form.appendChild(importButton);
 }
 
-function mcpRow(id, server) {
+function mcpRow(id, server, enabled) {
   const row = element("div", "server-row");
+  row.dataset.enabled = enabled ? "1" : "0";
+  const toggle = document.createElement("input");
+  toggle.type = "checkbox";
+  toggle.checked = enabled;
+  toggle.title = "Включён";
+  toggle.onchange = () => { row.dataset.enabled = toggle.checked ? "1" : "0"; };
+
   const idInput = document.createElement("input");
   idInput.className = "id";
   idInput.placeholder = "имя";
   idInput.value = id;
+
   const type = document.createElement("select");
   ["sse", "stdio"].forEach((option) => {
     const node = document.createElement("option");
@@ -956,6 +1038,7 @@ function mcpRow(id, server) {
     type.appendChild(node);
   });
   type.value = server.type || "sse";
+
   const rest = document.createElement("input");
   rest.className = "rest";
   rest.placeholder = type.value === "sse" ? "http://адрес/sse" : "команда arg1 arg2";
@@ -963,10 +1046,258 @@ function mcpRow(id, server) {
     ? [server.command].concat(server.args || []).join(" ")
     : (server.url || "");
   type.onchange = () => { rest.placeholder = type.value === "sse" ? "http://адрес/sse" : "команда arg1 arg2"; };
+
+  const env = document.createElement("input");
+  env.className = "env";
+  env.placeholder = "KEY=значение; KEY2=значение";
+  env.style.width = "220px";
+  env.value = Object.entries(server.env || {}).map(([k, v]) => k + "=" + v).join("; ");
+
   const kill = element("button", "ghost", "✕");
   kill.onclick = () => row.remove();
-  row.append(idInput, type, rest, kill);
+  row.append(toggle, idInput, type, rest, env, kill);
   return row;
+}
+
+/* ------------------------------------------------------------ skills */
+function renderSkillsSection(form) {
+  form.appendChild(element("div", "section-title", "Навыки — методички для агента"));
+  form.appendChild(element("div", "note",
+    "Навык описывает, как выполнять задачу определённого типа. Выбранные навыки " +
+    "подмешиваются в инструкции агента. Для локальной модели это самый заметный прирост качества."));
+
+  const list = element("div", "skill-list");
+  (skillList || []).forEach((skill) => {
+    const box = element("div", "toolcard");
+    const head = element("div", "server-row");
+    head.appendChild(element("b", null, skill.name));
+    const edit = element("button", "ghost", "Открыть");
+    edit.style.marginLeft = "auto";
+    edit.onclick = () => openSkillEditor(skill.slug);
+    const kill = element("button", "ghost", "✕");
+    kill.onclick = async () => {
+      if (!confirm("Удалить навык «" + skill.name + "»?")) return;
+      await api("/api/skills/" + encodeURIComponent(skill.slug), { method: "DELETE" });
+      skillList = (await api("/api/skills")).skills;
+      renderDialog();
+    };
+    head.append(edit, kill);
+    box.appendChild(head);
+    box.appendChild(element("div", null, skill.description || "без описания"));
+    list.appendChild(box);
+  });
+  if (!skillList.length) list.appendChild(element("div", "note", "Навыков пока нет"));
+  form.appendChild(list);
+
+  const actions = element("div", "server-row");
+  actions.style.marginTop = "12px";
+  const create = element("button", null, "Создать навык");
+  create.onclick = () => openSkillEditor(null);
+  const upload = element("button", null, "Загрузить файл");
+  upload.onclick = () => $("skill-file").click();
+  actions.append(create, upload);
+  form.appendChild(actions);
+
+  form.appendChild(element("div", "section-title", "Импорт с GitHub"));
+  const urlRow = element("div", "server-row");
+  const url = document.createElement("input");
+  url.className = "rest";
+  url.placeholder = "https://github.com/владелец/репозиторий или ссылка на SKILL.md";
+  const go = element("button", null, "Импортировать");
+  go.onclick = async () => {
+    dialogStatus("Скачиваю…");
+    try {
+      const skill = await api("/api/skills/import", {
+        method: "POST", body: JSON.stringify({ url: url.value.trim() }),
+      });
+      skillList = (await api("/api/skills")).skills;
+      renderDialog();
+      dialogStatus("Навык «" + skill.name + "» добавлен", "ok");
+    } catch (error) {
+      dialogStatus(error.message, "bad");
+    }
+  };
+  urlRow.append(url, go);
+  form.appendChild(urlRow);
+}
+
+async function openSkillEditor(slug) {
+  const skill = slug ? await api("/api/skills/" + encodeURIComponent(slug)) : { name: "", description: "", body: "" };
+  const form = $("dialog-form");
+  form.innerHTML = "";
+  form.appendChild(element("div", "section-title", slug ? "Навык: " + skill.name : "Новый навык"));
+
+  const nameInput = document.createElement("input");
+  nameInput.type = "text";
+  nameInput.value = skill.name;
+  nameInput.placeholder = "Название, например «SEO-аудит сайта»";
+  const descInput = document.createElement("input");
+  descInput.type = "text";
+  descInput.value = skill.description;
+  descInput.placeholder = "Когда применять — одной строкой";
+  const bodyInput = document.createElement("textarea");
+  bodyInput.rows = 16;
+  bodyInput.value = skill.body || "";
+  bodyInput.placeholder = "Методика в свободной форме: шаги, правила, формат результата";
+  [nameInput, descInput, bodyInput].forEach((input) => {
+    input.style.cssText = "width:100%;border:1px solid var(--line);border-radius:8px;padding:8px;margin-bottom:10px";
+    form.appendChild(input);
+  });
+
+  const row = element("div", "server-row");
+  const save = element("button", "primary", "Сохранить навык");
+  save.onclick = async () => {
+    try {
+      await api("/api/skills", {
+        method: "POST",
+        body: JSON.stringify({
+          slug: slug || "", name: nameInput.value.trim(),
+          description: descInput.value.trim(), body: bodyInput.value,
+        }),
+      });
+      skillList = (await api("/api/skills")).skills;
+      renderDialog();
+      dialogStatus("Навык сохранён", "ok");
+    } catch (error) {
+      dialogStatus(error.message, "bad");
+    }
+  };
+  const back = element("button", null, "Назад");
+  back.onclick = () => renderDialog();
+  row.append(save, back);
+  form.appendChild(row);
+}
+
+/* ---------------------------------------------------------- own APIs */
+function renderApiToolsSection(form) {
+  form.appendChild(element("div", "section-title", "Свои API как инструменты агента"));
+  form.appendChild(element("div", "note",
+    "Опишите эндпоинт — агент сможет его вызывать. Параметры в адресе пишутся как {имя} " +
+    "и отмечаются местом «path»."));
+
+  const box = element("div", "api-list");
+  (apiTools || []).forEach((spec, index) => box.appendChild(apiToolCard(spec, index)));
+  if (!apiTools.length) box.appendChild(element("div", "note", "Пока ничего не описано"));
+  form.appendChild(box);
+
+  const add = element("button", null, "Добавить эндпоинт");
+  add.style.marginTop = "12px";
+  add.onclick = () => {
+    apiTools.push({ name: "", description: "", method: "GET", url: "", headers: {}, params: [] });
+    renderDialog();
+  };
+  form.appendChild(add);
+}
+
+function apiToolCard(spec, index) {
+  const box = element("div", "toolcard");
+  const head = element("div", "server-row");
+  const name = document.createElement("input");
+  name.className = "id";
+  name.placeholder = "имя_инструмента";
+  name.value = spec.name || "";
+  name.oninput = () => { spec.name = name.value.trim(); };
+  const method = document.createElement("select");
+  ["GET", "POST", "PUT", "DELETE"].forEach((option) => {
+    const node = document.createElement("option");
+    node.value = option;
+    node.textContent = option;
+    method.appendChild(node);
+  });
+  method.value = spec.method || "GET";
+  method.onchange = () => { spec.method = method.value; };
+  const url = document.createElement("input");
+  url.className = "rest";
+  url.placeholder = "https://api.example.com/v1/data/{id}";
+  url.value = spec.url || "";
+  url.oninput = () => { spec.url = url.value.trim(); };
+  const kill = element("button", "ghost", "✕");
+  kill.onclick = () => { apiTools.splice(index, 1); renderDialog(); };
+  head.append(name, method, url, kill);
+  box.appendChild(head);
+
+  const description = document.createElement("input");
+  description.placeholder = "Что делает — этот текст читает модель";
+  description.value = spec.description || "";
+  description.style.cssText = "width:100%;border:1px solid var(--line);border-radius:8px;padding:6px 8px;margin:8px 0";
+  description.oninput = () => { spec.description = description.value; };
+  box.appendChild(description);
+
+  const headers = document.createElement("input");
+  headers.placeholder = "Заголовки: Authorization=Bearer xxx; X-Key=значение";
+  headers.value = Object.entries(spec.headers || {}).map(([k, v]) => k + "=" + v).join("; ");
+  headers.style.cssText = description.style.cssText;
+  headers.oninput = () => { spec.headers = parsePairs(headers.value); };
+  box.appendChild(headers);
+
+  (spec.params || []).forEach((param, paramIndex) => {
+    const row = element("div", "server-row");
+    const pname = document.createElement("input");
+    pname.className = "id";
+    pname.placeholder = "параметр";
+    pname.value = param.name || "";
+    pname.oninput = () => { param.name = pname.value.trim(); };
+    const where = document.createElement("select");
+    ["query", "path", "body", "header"].forEach((option) => {
+      const node = document.createElement("option");
+      node.value = option;
+      node.textContent = option;
+      where.appendChild(node);
+    });
+    where.value = param.in || "query";
+    where.onchange = () => { param.in = where.value; };
+    const pdesc = document.createElement("input");
+    pdesc.className = "rest";
+    pdesc.placeholder = "описание для модели";
+    pdesc.value = param.description || "";
+    pdesc.oninput = () => { param.description = pdesc.value; };
+    const required = document.createElement("input");
+    required.type = "checkbox";
+    required.title = "обязательный";
+    required.checked = Boolean(param.required);
+    required.onchange = () => { param.required = required.checked; };
+    const kill = element("button", "ghost", "✕");
+    kill.onclick = () => { spec.params.splice(paramIndex, 1); renderDialog(); };
+    row.append(pname, where, pdesc, required, kill);
+    box.appendChild(row);
+  });
+
+  const actions = element("div", "server-row");
+  const addParam = element("button", "ghost", "+ параметр");
+  addParam.onclick = () => {
+    spec.params = spec.params || [];
+    spec.params.push({ name: "", in: "query", description: "", required: false });
+    renderDialog();
+  };
+  const test = element("button", "ghost", "Проверить");
+  test.onclick = async () => {
+    const args = {};
+    (spec.params || []).forEach((param) => {
+      const value = prompt("Значение для «" + param.name + "»", param.default || "");
+      if (value) args[param.name] = value;
+    });
+    dialogStatus("Запрашиваю…");
+    try {
+      const result = await api("/api/api-tools/test", {
+        method: "POST", body: JSON.stringify({ spec: spec, arguments: args }),
+      });
+      dialogStatus(result.result.slice(0, 200), result.ok ? "ok" : "bad");
+    } catch (error) {
+      dialogStatus(error.message, "bad");
+    }
+  };
+  actions.append(addParam, test);
+  box.appendChild(actions);
+  return box;
+}
+
+function parsePairs(text) {
+  const result = {};
+  text.split(";").forEach((pair) => {
+    const index = pair.indexOf("=");
+    if (index > 0) result[pair.slice(0, index).trim()] = pair.slice(index + 1).trim();
+  });
+  return result;
 }
 
 function collectSettings() {
@@ -992,19 +1323,22 @@ function collectSettings() {
 }
 
 function collectMcp() {
-  const servers = {};
-  document.querySelectorAll("#dialog-form .server-row").forEach((row) => {
-    const [idInput, type, rest] = row.children;
+  const servers = {}, disabled = {};
+  document.querySelectorAll("#dialog-form .server-row[data-enabled]").forEach((row) => {
+    const [, idInput, type, rest, env] = row.children;
     const id = idInput.value.trim();
     if (!id) return;
-    if (type.value === "sse") {
-      servers[id] = { type: "sse", url: rest.value.trim() };
-    } else {
-      const parts = rest.value.trim().split(/\s+/);
-      servers[id] = { type: "stdio", command: parts[0] || "", args: parts.slice(1) };
-    }
+    const server = type.value === "sse"
+      ? { type: "sse", url: rest.value.trim() }
+      : (() => {
+          const parts = rest.value.trim().split(/\s+/);
+          return { type: "stdio", command: parts[0] || "", args: parts.slice(1) };
+        })();
+    const pairs = parsePairs(env.value);
+    if (Object.keys(pairs).length) server.env = pairs;
+    (row.dataset.enabled === "1" ? servers : disabled)[id] = server;
   });
-  return servers;
+  return { servers: servers, disabled: disabled };
 }
 
 function dialogStatus(text, kind) {
@@ -1016,6 +1350,8 @@ function dialogStatus(text, kind) {
 async function openSettings() {
   settings = await api("/api/settings");
   mcp = await api("/api/mcp");
+  skillList = (await api("/api/skills")).skills;
+  apiTools = (await api("/api/api-tools")).tools;
   try {
     models = (await api("/api/settings/models")).models;
   } catch (error) {
@@ -1029,10 +1365,20 @@ async function openSettings() {
 async function saveSettings() {
   try {
     if (dialogSection === "mcp") {
-      const servers = collectMcp();
-      const result = await api("/api/mcp", { method: "POST", body: JSON.stringify({ servers: servers }) });
-      mcp = { servers: servers, connected: result.connected };
-      dialogStatus("MCP-серверы сохранены", "ok");
+      const collected = collectMcp();
+      const result = await api("/api/mcp", {
+        method: "POST",
+        body: JSON.stringify({ servers: collected.servers, disabled: collected.disabled }),
+      });
+      mcp = Object.assign({}, mcp, collected, { connected: result.connected });
+      appConfig = await api("/api/config");
+      dialogStatus("Плагины сохранены. Подключатся при следующем запуске задачи", "ok");
+    } else if (dialogSection === "apitools") {
+      const result = await api("/api/api-tools", {
+        method: "POST", body: JSON.stringify({ tools: apiTools }),
+      });
+      apiTools = result.tools;
+      dialogStatus("Сохранено. Инструменты появятся у агента со следующего запуска", "ok");
     } else if (dialogSection === "task") {
       const input = document.querySelector('#dialog-form [data-key="max_steps"]');
       sessionInfo = await api("/api/sessions/" + currentId, {
@@ -1152,6 +1498,81 @@ computer.addEventListener("drop", (event) => {
   if (event.dataTransfer && event.dataTransfer.files.length) uploadFiles(event.dataTransfer.files);
 });
 
+/* ---------------------------------------------------- skills picker */
+async function refreshSkills() {
+  skillList = (await api("/api/skills")).skills;
+  renderSkillsButton();
+}
+
+function renderSkillsButton() {
+  const attached = (sessionInfo && sessionInfo.skills) || [];
+  $("skills-button").textContent = attached.length ? "Навыки: " + attached.length : "Навыки";
+  $("skills-button").classList.toggle("primary", attached.length > 0);
+}
+
+function renderSkillsMenu() {
+  const menu = $("skills-menu");
+  menu.innerHTML = "";
+  if (!skillList.length) {
+    menu.appendChild(element("div", "note",
+      "Навыков пока нет. Добавьте их в настройках: создайте свой или импортируйте с GitHub."));
+    return;
+  }
+  const attached = (sessionInfo && sessionInfo.skills) || [];
+  skillList.forEach((skill) => {
+    const label = document.createElement("label");
+    const check = document.createElement("input");
+    check.type = "checkbox";
+    check.checked = attached.includes(skill.slug);
+    check.onchange = async () => {
+      const chosen = Array.from(menu.querySelectorAll("input:checked"))
+        .map((input) => input.dataset.slug);
+      sessionInfo = await api("/api/sessions/" + currentId, {
+        method: "PATCH", body: JSON.stringify({ skills: chosen }),
+      });
+      renderSkillsButton();
+    };
+    check.dataset.slug = skill.slug;
+    const text = element("span", null, skill.name);
+    if (skill.description) text.appendChild(element("small", null, skill.description));
+    label.append(check, text);
+    menu.appendChild(label);
+  });
+}
+
+$("skills-button").onclick = async () => {
+  if (!currentId) {
+    const info = await api("/api/sessions", { method: "POST" });
+    await selectTask(info.id);
+  }
+  await refreshSkills();
+  renderSkillsMenu();
+  $("skills-menu").classList.toggle("open");
+};
+
+document.addEventListener("click", (event) => {
+  if (!event.target.closest(".picker")) $("skills-menu").classList.remove("open");
+});
+
+$("skill-file").onchange = async (event) => {
+  const file = event.target.files[0];
+  event.target.value = "";
+  if (!file) return;
+  const text = await file.text();
+  const match = text.match(/^---\s*\nname:\s*(.+?)\n(?:description:\s*(.+?)\n)?---\s*\n([\s\S]*)$/);
+  const payload = match
+    ? { slug: "", name: match[1].trim(), description: (match[2] || "").trim(), body: match[3] }
+    : { slug: "", name: file.name.replace(/\.[^.]+$/, ""), description: "", body: text };
+  try {
+    await api("/api/skills", { method: "POST", body: JSON.stringify(payload) });
+    skillList = (await api("/api/skills")).skills;
+    renderDialog();
+    dialogStatus("Навык загружен", "ok");
+  } catch (error) {
+    dialogStatus(error.message, "bad");
+  }
+};
+
 (async function start() {
   appConfig = await api("/api/config");
   renderModelMeta();
@@ -1160,6 +1581,7 @@ computer.addEventListener("drop", (event) => {
   const existing = sessions.find((info) => info.id === saved) || sessions[0];
   if (existing) await selectTask(existing.id);
   else await loadTasks();
+  await refreshSkills();
 })();
 </script>
 </body>

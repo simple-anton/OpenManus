@@ -117,7 +117,7 @@ class Manus(ToolCallAgent):
                             stdio_env=(
                                 _browser_use_env()
                                 if server_id == _BROWSER_USE_SERVER_ID
-                                else None
+                                else (server_config.env or None)
                             ),
                         )
                         logger.info(

@@ -3,3 +3,5 @@ config.toml
 
 # written by the web interface
 mcp.json
+api_tools.json
+skills/

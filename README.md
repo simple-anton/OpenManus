@@ -184,7 +184,21 @@ Settings writes `config/config.toml` (model and vision model, browser, search,
 sandbox, planner) and `config/mcp.json` (MCP servers), reloads them into the
 running process, lists the models the configured server offers, and can send a
 test request to check the connection. Tasks are saved under
-`workspace/.sessions`, so the history survives a restart. Use `--host` / `--port`
+`workspace/.sessions`, so the history survives a restart.
+
+Three things extend what the agent can do, all from the same dialog:
+
+- **Skills** - markdown methods stored in `config/skills/<slug>/SKILL.md`, in the
+  same shape published skill repositories use. Write one in the browser, upload a
+  file, or import from a GitHub URL; attach the ones a task needs and their text
+  is appended to the agent's system prompt.
+- **Plugins** - a catalogue of ready MCP servers (Python ones run through `uvx`,
+  npm ones through `npx`), plus manual entries, JSON import, per-server
+  environment variables and an on/off switch that keeps a server configured but
+  unloaded.
+- **Custom APIs** - describe an HTTP endpoint (address, method, headers,
+  parameters) in `config/api_tools.json` and the agent gets it as a regular tool;
+  a Test button calls it once and shows the response. Use `--host` / `--port`
 (or the `OPENMANUS_HOST` / `OPENMANUS_PORT` environment variables) to change
 the bind address.
 

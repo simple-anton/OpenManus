@@ -6,6 +6,7 @@ browser, search and sandbox options without a terminal.
 """
 
 import json
+import shutil
 import tomllib
 from pathlib import Path
 from typing import Any, Dict, List
@@ -143,27 +144,147 @@ def reload_config() -> None:
 # ------------------------------------------------------------------- MCP servers
 
 
+# ready-made servers offered in the interface; "node" ones need Node.js
+MCP_CATALOGUE = [
+    {
+        "id": "fetch",
+        "title": "Загрузка страниц",
+        "description": "Скачивает веб-страницу и отдаёт её текстом. Python, ставится сам.",
+        "server": {"type": "stdio", "command": "uvx", "args": ["mcp-server-fetch"]},
+    },
+    {
+        "id": "time",
+        "title": "Время и часовые пояса",
+        "description": "Текущее время, перевод между часовыми поясами. Python.",
+        "server": {"type": "stdio", "command": "uvx", "args": ["mcp-server-time"]},
+    },
+    {
+        "id": "git",
+        "title": "Git-репозитории",
+        "description": "Чтение истории и файлов локального репозитория. Python.",
+        "server": {
+            "type": "stdio",
+            "command": "uvx",
+            "args": ["mcp-server-git", "--repository", "/app/OpenManus/workspace"],
+        },
+    },
+    {
+        "id": "sqlite",
+        "title": "База SQLite",
+        "description": "Запросы к файлу базы данных внутри workspace. Python.",
+        "server": {
+            "type": "stdio",
+            "command": "uvx",
+            "args": [
+                "mcp-server-sqlite",
+                "--db-path",
+                "/app/OpenManus/workspace/data.db",
+            ],
+        },
+    },
+    {
+        "id": "filesystem",
+        "title": "Файловая система",
+        "description": "Чтение и запись файлов в указанной папке. Требует Node.js.",
+        "needs_node": True,
+        "server": {
+            "type": "stdio",
+            "command": "npx",
+            "args": [
+                "-y",
+                "@modelcontextprotocol/server-filesystem",
+                "/app/OpenManus/workspace",
+            ],
+        },
+    },
+    {
+        "id": "memory",
+        "title": "Долгая память",
+        "description": "Граф знаний, который агент наполняет между задачами. Требует Node.js.",
+        "needs_node": True,
+        "server": {
+            "type": "stdio",
+            "command": "npx",
+            "args": ["-y", "@modelcontextprotocol/server-memory"],
+        },
+    },
+    {
+        "id": "sequential-thinking",
+        "title": "Пошаговое рассуждение",
+        "description": "Помогает модели разбивать задачу на шаги. Требует Node.js.",
+        "needs_node": True,
+        "server": {
+            "type": "stdio",
+            "command": "npx",
+            "args": ["-y", "@modelcontextprotocol/server-sequential-thinking"],
+        },
+    },
+    {
+        "id": "github",
+        "title": "GitHub",
+        "description": "Issues, pull requests, код. Нужен токен GITHUB_PERSONAL_ACCESS_TOKEN и Node.js.",
+        "needs_node": True,
+        "server": {
+            "type": "stdio",
+            "command": "npx",
+            "args": ["-y", "@modelcontextprotocol/server-github"],
+            "env": {"GITHUB_PERSONAL_ACCESS_TOKEN": ""},
+        },
+    },
+    {
+        "id": "slack",
+        "title": "Slack",
+        "description": "Чтение и отправка сообщений. Нужны SLACK_BOT_TOKEN и SLACK_TEAM_ID, Node.js.",
+        "needs_node": True,
+        "server": {
+            "type": "stdio",
+            "command": "npx",
+            "args": ["-y", "@modelcontextprotocol/server-slack"],
+            "env": {"SLACK_BOT_TOKEN": "", "SLACK_TEAM_ID": ""},
+        },
+    },
+]
+
+
+def node_available() -> bool:
+    return shutil.which("npx") is not None
+
+
 def read_mcp() -> Dict[str, Any]:
     if not MCP_PATH.exists():
-        return {"mcpServers": {}}
+        return {"mcpServers": {}, "disabledServers": {}}
     try:
-        return json.loads(MCP_PATH.read_text(encoding="utf-8"))
+        data = json.loads(MCP_PATH.read_text(encoding="utf-8"))
     except json.JSONDecodeError:
-        return {"mcpServers": {}}
+        return {"mcpServers": {}, "disabledServers": {}}
+    data.setdefault("mcpServers", {})
+    data.setdefault("disabledServers", {})
+    return data
 
 
-def write_mcp(servers: Dict[str, Any]) -> None:
+def _check_server(server_id: str, server: Dict[str, Any]) -> None:
+    if server.get("type") not in {"sse", "stdio"}:
+        raise ValueError(f"{server_id}: тип должен быть sse или stdio")
+    if server["type"] == "sse" and not server.get("url"):
+        raise ValueError(f"{server_id}: для sse нужен адрес")
+    if server["type"] == "stdio" and not server.get("command"):
+        raise ValueError(f"{server_id}: для stdio нужна команда")
+
+
+def write_mcp(servers: Dict[str, Any], disabled: Dict[str, Any] = None) -> None:
+    """Enabled servers go to mcpServers; the rest are kept, but not loaded."""
     for server_id, server in servers.items():
-        if server.get("type") not in {"sse", "stdio"}:
-            raise ValueError(f"{server_id}: type must be sse or stdio")
-        if server["type"] == "sse" and not server.get("url"):
-            raise ValueError(f"{server_id}: sse server needs a url")
-        if server["type"] == "stdio" and not server.get("command"):
-            raise ValueError(f"{server_id}: stdio server needs a command")
+        _check_server(server_id, server)
+    for server_id, server in (disabled or {}).items():
+        _check_server(server_id, server)
 
     MCP_PATH.parent.mkdir(parents=True, exist_ok=True)
     MCP_PATH.write_text(
-        json.dumps({"mcpServers": servers}, indent=2, ensure_ascii=False),
+        json.dumps(
+            {"mcpServers": servers, "disabledServers": disabled or {}},
+            indent=2,
+            ensure_ascii=False,
+        ),
         encoding="utf-8",
     )
     reload_config()

@@ -16,7 +16,9 @@ from pydantic import BaseModel
 
 from app.config import config
 from app.logger import logger
+from app.web import api_tools as api_tools_store
 from app.web import settings as settings_store
+from app.web import skills as skills_store
 from app.web.session import Session
 
 
@@ -42,6 +44,27 @@ class AnswerRequest(BaseModel):
 class SessionPatch(BaseModel):
     title: Optional[str] = None
     max_steps: Optional[int] = None
+    skills: Optional[List[str]] = None
+
+
+class SkillRequest(BaseModel):
+    slug: str = ""
+    name: str
+    description: str = ""
+    body: str
+
+
+class ImportRequest(BaseModel):
+    url: str
+
+
+class ApiToolsRequest(BaseModel):
+    tools: List[Dict[str, Any]]
+
+
+class ApiTestRequest(BaseModel):
+    spec: Dict[str, Any]
+    arguments: Dict[str, Any] = {}
 
 
 class SettingsRequest(BaseModel):
@@ -50,6 +73,7 @@ class SettingsRequest(BaseModel):
 
 class McpRequest(BaseModel):
     servers: Dict[str, Any]
+    disabled: Dict[str, Any] = {}
 
 
 def _log_sink(message) -> None:
@@ -166,6 +190,8 @@ def create_app() -> FastAPI:
             session.max_steps = max(1, min(patch.max_steps, 100))
             if session.agent is not None:
                 session.agent.max_steps = session.max_steps
+        if patch.skills is not None:
+            session.set_skills(patch.skills)
         session._save_meta()
         return session.info()
 
@@ -384,20 +410,87 @@ def create_app() -> FastAPI:
 
     @app.get("/api/mcp")
     async def read_mcp() -> Dict[str, Any]:
+        stored = settings_store.read_mcp()
         return {
-            "servers": settings_store.read_mcp().get("mcpServers", {}),
+            "servers": stored.get("mcpServers", {}),
+            "disabled": stored.get("disabledServers", {}),
+            "catalogue": settings_store.MCP_CATALOGUE,
+            "node": settings_store.node_available(),
             "connected": sorted(config.mcp_config.servers),
         }
 
     @app.post("/api/mcp")
     async def write_mcp(request: McpRequest) -> Dict[str, Any]:
         try:
-            settings_store.write_mcp(request.servers)
+            settings_store.write_mcp(request.servers, request.disabled)
         except Exception as exc:
             raise HTTPException(status_code=400, detail=str(exc))
         for session in SESSIONS.values():
             await session.reset_agent()
         return {"status": "saved", "connected": sorted(config.mcp_config.servers)}
+
+    # ------------------------------------------------------------------ skills
+
+    @app.get("/api/skills")
+    async def list_skills() -> Dict[str, Any]:
+        return {"skills": skills_store.list_skills()}
+
+    @app.get("/api/skills/{slug}")
+    async def read_skill(slug: str) -> Dict[str, Any]:
+        skill = skills_store.read_skill(slug)
+        if skill is None:
+            raise HTTPException(status_code=404, detail="Навык не найден")
+        return skill
+
+    @app.post("/api/skills")
+    async def write_skill(request: SkillRequest) -> Dict[str, Any]:
+        try:
+            return skills_store.write_skill(
+                request.slug, request.name, request.description, request.body
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc))
+
+    @app.delete("/api/skills/{slug}")
+    async def delete_skill(slug: str) -> Dict[str, str]:
+        skills_store.delete_skill(slug)
+        for session in SESSIONS.values():
+            if slug in session.skills:
+                session.set_skills([s for s in session.skills if s != slug])
+        return {"status": "deleted"}
+
+    @app.post("/api/skills/import")
+    async def import_skill(request: ImportRequest) -> Dict[str, Any]:
+        try:
+            return await skills_store.import_from_url(request.url)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc))
+
+    # -------------------------------------------------------------- api tools
+
+    @app.get("/api/api-tools")
+    async def read_api_tools() -> Dict[str, Any]:
+        return {"tools": api_tools_store.read_specs()}
+
+    @app.post("/api/api-tools")
+    async def write_api_tools(request: ApiToolsRequest) -> Dict[str, Any]:
+        # drafts the user added but never named are simply dropped
+        specs = [spec for spec in request.tools if (spec.get("name") or "").strip()]
+        try:
+            api_tools_store.write_specs(specs)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc))
+        for session in SESSIONS.values():
+            await session.reset_agent()
+        return {"status": "saved", "tools": api_tools_store.read_specs()}
+
+    @app.post("/api/api-tools/test")
+    async def test_api_tool(request: ApiTestRequest) -> Dict[str, Any]:
+        try:
+            result = await api_tools_store.try_call(request.spec, request.arguments)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc))
+        return {"result": result, "ok": not result.startswith("Error")}
 
     # -------------------------------------------------------------------- logs
 

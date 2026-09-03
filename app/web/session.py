@@ -19,6 +19,8 @@ from app.logger import logger
 from app.prompt.manus import SYSTEM_PROMPT
 from app.schema import Message
 from app.tool.base import BaseTool
+from app.web import api_tools
+from app.web import skills as skills_store
 from app.web.agent import WebManus, create_data_analysis_agent
 
 
@@ -67,11 +69,13 @@ class Session:
         title: str = "Новая задача",
         created_at: Optional[float] = None,
         max_steps: int = 20,
+        skills: Optional[List[str]] = None,
     ):
         self.id = session_id
         self.title = title
         self.created_at = created_at or time.time()
         self.max_steps = max_steps
+        self.skills: List[str] = list(skills or [])
         self.agent: Optional[WebManus] = None
         self.task: Optional[asyncio.Task] = None
         self.state = "idle"
@@ -106,6 +110,7 @@ class Session:
                         "title": self.title,
                         "created_at": self.created_at,
                         "max_steps": self.max_steps,
+                        "skills": self.skills,
                     },
                     ensure_ascii=False,
                 ),
@@ -157,6 +162,7 @@ class Session:
                     title=meta.get("title", "Задача"),
                     created_at=meta.get("created_at"),
                     max_steps=meta.get("max_steps", 20),
+                    skills=meta.get("skills", []),
                 )
                 session._load_events(folder / "events.jsonl")
                 memory_file = folder / "memory.json"
@@ -243,21 +249,41 @@ class Session:
         async with self._agent_lock:
             if self.agent is None:
                 agent = await WebManus.create(session=self)
-                # point the agent at this task's folder, not the shared workspace
-                agent.system_prompt = SYSTEM_PROMPT.format(directory=self.workspace)
                 self._attach_web_tools(agent)
                 self._carry_memory(agent)
                 self.agent = agent
             self.agent.max_steps = self.max_steps
+            self.apply_prompt()
             return self.agent
 
+    def apply_prompt(self) -> None:
+        """Point the agent at this task's folder and its attached skills."""
+        if self.agent is None:
+            return
+        self.agent.system_prompt = SYSTEM_PROMPT.format(
+            directory=self.workspace
+        ) + skills_store.prompt_for(self.skills)
+
+    def set_skills(self, slugs: List[str]) -> None:
+        self.skills = [slug for slug in slugs if skills_store.read_skill(slug)]
+        self._save_meta()
+        self.apply_prompt()
+
     def _attach_web_tools(self, agent: WebManus) -> None:
-        """Swap the stdin-based ask_human tool for the browser-based one."""
+        """Browser-based ask_human, plus the endpoints defined in the UI."""
         web_ask = WebAskHuman(session=self)
         tools = tuple(
             web_ask if tool.name == web_ask.name else tool
             for tool in agent.available_tools.tools
         )
+        custom = tuple(
+            tool
+            for tool in api_tools.build_tools()
+            if tool.name not in {existing.name for existing in tools}
+        )
+        if custom:
+            logger.info(f"Attached custom API tools: {[t.name for t in custom]}")
+        tools = tools + custom
         agent.available_tools.tools = tools
         agent.available_tools.tool_map = {tool.name: tool for tool in tools}
 
@@ -462,5 +488,6 @@ class Session:
             "queued": len(self._queued),
             "workspace": str(self.workspace),
             "max_steps": self.max_steps,
+            "skills": self.skills,
             "tools": self.tools(),
         }
