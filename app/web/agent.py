@@ -136,4 +136,22 @@ def _data_analysis_class():
 
 def create_data_analysis_agent(session: Any):
     """The charting agent the planning flow uses when it is switched on."""
-    return _data_analysis_class()(session=session)
+    agent = _data_analysis_class()(session=session)
+    point_at_workspace(agent, session.workspace)
+    return agent
+
+
+def point_at_workspace(agent: Any, workspace: Any) -> None:
+    """Send the analyst's files to the task's folder, not the shared workspace.
+
+    Its prompt and its tools are written around one directory, and by default
+    that is workspace/ for every task at once. The task folder is what the
+    interface shows in "Files", so charts and reports have to land there.
+    """
+    from app.prompt.visualization import SYSTEM_PROMPT as VISUALIZATION_PROMPT
+
+    folder = str(workspace)
+    agent.system_prompt = VISUALIZATION_PROMPT.format(directory=folder)
+    for tool in agent.available_tools.tools:
+        if "directory" in type(tool).model_fields:
+            tool.directory = folder

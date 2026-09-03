@@ -1,7 +1,7 @@
 import asyncio
 import json
 import os
-from typing import Any, Hashable
+from typing import Any, Hashable, Optional
 
 import pandas as pd
 from pydantic import Field, model_validator
@@ -49,6 +49,8 @@ Outputs:
         "required": ["code"],
     }
     llm: LLM = Field(default_factory=LLM, description="Language model instance")
+    # Where charts and their data live. None means the shared workspace.
+    directory: Optional[str] = None
 
     @model_validator(mode="after")
     def initialize_llm(self):
@@ -56,6 +58,10 @@ Outputs:
         if self.llm is None or not isinstance(self.llm, LLM):
             self.llm = LLM(config_name=self.name.lower())
         return self
+
+    @property
+    def output_dir(self) -> str:
+        return self.directory or str(config.workspace_root)
 
     def get_file_path(
         self,
@@ -68,12 +74,10 @@ Outputs:
             if os.path.exists(item[path_str]):
                 res.append(item[path_str])
             elif os.path.exists(
-                os.path.join(f"{directory or config.workspace_root}", item[path_str])
+                os.path.join(f"{directory or self.output_dir}", item[path_str])
             ):
                 res.append(
-                    os.path.join(
-                        f"{directory or config.workspace_root}", item[path_str]
-                    )
+                    os.path.join(f"{directory or self.output_dir}", item[path_str])
                 )
             else:
                 raise Exception(f"No such file or directory: {item[path_str]}")
@@ -150,7 +154,7 @@ Outputs:
     ) -> str:
         data_list = []
         chart_file_path = self.get_file_path(
-            json_info, "chartPath", os.path.join(config.workspace_root, "visualization")
+            json_info, "chartPath", os.path.join(self.output_dir, "visualization")
         )
         for index, item in enumerate(json_info):
             if "insights_id" in item:
@@ -237,7 +241,7 @@ Outputs:
             "output_type": output_type,
             "insights_id": insights_id,
             "task_type": task_type,
-            "directory": str(config.workspace_root),
+            "directory": self.output_dir,
             "language": language,
         }
         # build async sub process
