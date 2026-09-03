@@ -190,8 +190,11 @@ Three things extend what the agent can do, all from the same dialog:
 
 - **Skills** - markdown methods stored in `config/skills/<slug>/SKILL.md`, in the
   same shape published skill repositories use. Write one in the browser, upload a
-  file, or import from a GitHub URL; attach the ones a task needs and their text
-  is appended to the agent's system prompt.
+  file, or import from a GitHub URL - a repository or folder URL brings the whole
+  skill folder, scripts and references included, and the agent is told where those
+  files live. The dialog also lists verified public skills from Anthropic's open
+  repository for one-click import. Attach the ones a task needs and their text is
+  appended to the agent's system prompt.
 - **Plugins** - a catalogue of ready MCP servers (Python ones run through `uvx`,
   npm ones through `npx`), plus manual entries, JSON import, per-server
   environment variables and an on/off switch that keeps a server configured but

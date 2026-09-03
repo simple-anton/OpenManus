@@ -411,7 +411,7 @@ let currentId = null, source = null, mode = "agent";
 let steps = [], activeStep = -1, tab = "terminal", logs = [], files = [];
 let exchanges = [], preview = null, sessionInfo = null, appConfig = null;
 let settings = null, mcp = null, models = [], dialogSection = "llm";
-let skillList = [], apiTools = [];
+let skillList = [], skillCatalogue = [], apiTools = [];
 
 const ICONS = {
   python_execute: "\u{1F40D}", str_replace_editor: "\u{1F4DD}", ask_human: "\u{1F4AC}",
@@ -1420,6 +1420,44 @@ function renderSkillsSection(form) {
   actions.append(create, upload);
   form.appendChild(actions);
 
+  form.appendChild(element("div", "section-title", "Готовые публичные навыки"));
+  form.appendChild(element("div", "note",
+    "Это открытый набор Anthropic в том же формате — не те навыки, что показывает Manus: " +
+    "их тексты нигде не опубликованы. Загружается вся папка навыка вместе со вспомогательными файлами."));
+  const catalogue = element("div", "cat");
+  skillCatalogue.forEach((item) => {
+    const installed = skillList.some((skill) => skill.name.toLowerCase() === item.title.toLowerCase());
+    const box = element("div", "toolcard");
+    const head = element("div", "server-row");
+    head.appendChild(element("b", null, item.title));
+    const add = element("button", installed ? "ghost" : null, installed ? "уже добавлен" : "Добавить");
+    add.disabled = installed;
+    add.style.marginLeft = "auto";
+    add.onclick = async () => {
+      add.disabled = true;
+      dialogStatus("Скачиваю «" + item.title + "»…");
+      try {
+        const skill = await api("/api/skills/import", {
+          method: "POST", body: JSON.stringify({ url: item.url }),
+        });
+        await refreshSkills();
+        renderDialog();
+        const files = (skill.files || []).length;
+        dialogStatus("Навык «" + skill.name + "» добавлен" +
+          (files ? ", файлов вместе с ним: " + files : "") +
+          (skill.warning ? ". " + skill.warning : ""), skill.warning ? "" : "ok");
+      } catch (error) {
+        add.disabled = false;
+        dialogStatus("Не удалось: " + error.message, "bad");
+      }
+    };
+    head.appendChild(add);
+    box.appendChild(head);
+    box.appendChild(element("div", null, item.description));
+    catalogue.appendChild(box);
+  });
+  form.appendChild(catalogue);
+
   form.appendChild(element("div", "section-title", "Импорт с GitHub"));
   const urlRow = element("div", "server-row");
   const url = document.createElement("input");
@@ -1432,9 +1470,12 @@ function renderSkillsSection(form) {
       const skill = await api("/api/skills/import", {
         method: "POST", body: JSON.stringify({ url: url.value.trim() }),
       });
-      skillList = (await api("/api/skills")).skills;
+      await refreshSkills();
       renderDialog();
-      dialogStatus("Навык «" + skill.name + "» добавлен", "ok");
+      const files = (skill.files || []).length;
+      dialogStatus("Навык «" + skill.name + "» добавлен" +
+        (files ? ", файлов вместе с ним: " + files : "") +
+        (skill.warning ? ". " + skill.warning : ""), skill.warning ? "" : "ok");
     } catch (error) {
       dialogStatus(error.message, "bad");
     }
@@ -1673,7 +1714,9 @@ function dialogStatus(text, kind) {
 async function openSettings() {
   settings = await api("/api/settings");
   mcp = await api("/api/mcp");
-  skillList = (await api("/api/skills")).skills;
+  const skillData = await api("/api/skills");
+  skillList = skillData.skills;
+  skillCatalogue = skillData.catalogue || [];
   apiTools = (await api("/api/api-tools")).tools;
   try {
     models = (await api("/api/settings/models")).models;
@@ -1836,7 +1879,9 @@ computer.addEventListener("drop", (event) => {
 
 /* ---------------------------------------------------- skills picker */
 async function refreshSkills() {
-  skillList = (await api("/api/skills")).skills;
+  const data = await api("/api/skills");
+  skillList = data.skills;
+  skillCatalogue = data.catalogue || [];
   renderSkillsButton();
 }
 

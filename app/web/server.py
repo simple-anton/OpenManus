@@ -438,7 +438,10 @@ def create_app() -> FastAPI:
 
     @app.get("/api/skills")
     async def list_skills() -> Dict[str, Any]:
-        return {"skills": skills_store.list_skills()}
+        return {
+            "skills": skills_store.list_skills(),
+            "catalogue": skills_store.PUBLIC_CATALOGUE,
+        }
 
     @app.get("/api/skills/{slug}")
     async def read_skill(slug: str) -> Dict[str, Any]:
