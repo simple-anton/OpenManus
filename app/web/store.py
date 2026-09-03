@@ -102,15 +102,11 @@ def write_cache(payload: Dict[str, Any]) -> None:
 
 
 def _front_matter(text: str) -> Dict[str, str]:
-    meta: Dict[str, str] = {}
-    if text.startswith("---"):
-        parts = text.split("---", 2)
-        if len(parts) == 3:
-            for line in parts[1].splitlines():
-                if ":" in line:
-                    key, value = line.split(":", 1)
-                    meta[key.strip().lower()] = value.strip().strip("\"'")
-    return meta
+    """The header of a published SKILL.md, read the same way the importer does."""
+    if not text.startswith("---"):
+        return {}
+    parts = text.split("---", 2)
+    return skills_store.parse_front_matter(parts[1]) if len(parts) == 3 else {}
 
 
 async def _repo_skills(

@@ -142,6 +142,63 @@ def slugify(name: str) -> str:
     return slug[:60] or "skill"
 
 
+def parse_front_matter(header: str) -> Dict[str, str]:
+    """The fields of a SKILL.md header, block scalars included.
+
+    Skills in the wild write their description three ways: on one line, folded
+    (`description: >`) and literal (`description: |-`), the last two followed by
+    an indented block. Splitting every line on ":" turns those two into the
+    marker itself - published skills would show ">" where their description
+    belongs - and mistakes sentences inside the block for further fields.
+    """
+    meta: Dict[str, str] = {}
+    lines = header.splitlines()
+    index = 0
+    while index < len(lines):
+        line = lines[index]
+        index += 1
+        if not line.strip() or line.lstrip().startswith("#"):
+            continue
+        if line[:1].isspace() or ":" not in line:
+            continue  # part of a block we are not inside of
+        key, value = line.split(":", 1)
+        key = key.strip().lower()
+        value = value.strip()
+        if not value or value[0] not in "|>":
+            meta[key] = value.strip("\"'")
+            continue
+
+        folded = value[0] == ">"
+        block: List[str] = []
+        while index < len(lines):  # the block runs until the indentation stops
+            following = lines[index]
+            if following.strip() and not following[:1].isspace():
+                break
+            block.append(following)
+            index += 1
+        indent = min(
+            (len(item) - len(item.lstrip()) for item in block if item.strip()),
+            default=0,
+        )
+        text = [item[indent:] if item.strip() else "" for item in block]
+        if not folded:
+            meta[key] = "\n".join(text).strip()
+            continue
+        # folded: a blank line starts a paragraph, the rest is one flow
+        paragraphs: List[str] = []
+        current: List[str] = []
+        for item in text:
+            if item.strip():
+                current.append(item.strip())
+            elif current:
+                paragraphs.append(" ".join(current))
+                current = []
+        if current:
+            paragraphs.append(" ".join(current))
+        meta[key] = "\n\n".join(paragraphs).strip()
+    return meta
+
+
 def _parse(text: str) -> Dict[str, Any]:
     """Split `---` front matter (name/description) from the body."""
     meta: Dict[str, str] = {}
@@ -149,16 +206,20 @@ def _parse(text: str) -> Dict[str, Any]:
     if text.startswith("---"):
         parts = text.split("---", 2)
         if len(parts) == 3:
-            for line in parts[1].splitlines():
-                if ":" in line:
-                    key, value = line.split(":", 1)
-                    meta[key.strip().lower()] = value.strip().strip("\"'")
+            meta = parse_front_matter(parts[1])
             body = parts[2].lstrip("\n")
     return {"meta": meta, "body": body}
 
 
 def _serialise(name: str, description: str, body: str) -> str:
-    header = f"---\nname: {name}\ndescription: {description}\n---\n\n"
+    if "\n" in description:
+        # a description of several lines only survives as a literal block
+        indented = "\n".join(
+            f"  {line}" if line.strip() else "" for line in description.splitlines()
+        )
+        header = f"---\nname: {name}\ndescription: |-\n{indented}\n---\n\n"
+    else:
+        header = f"---\nname: {name}\ndescription: {description}\n---\n\n"
     return header + body.strip() + "\n"
 
 
@@ -191,7 +252,15 @@ def read_skill(slug: str) -> Optional[Dict[str, Any]]:
 
 def write_skill(slug: str, name: str, description: str, body: str) -> Dict[str, Any]:
     if len(body) > MAX_SKILL_CHARS:
-        raise ValueError("Навык слишком длинный")
+        # the whole text goes into the model's prompt, so the limit is about the
+        # model's context, not about disk - say so instead of "too long"
+        size = f"{len(body):,}".replace(",", " ")
+        limit = f"{MAX_SKILL_CHARS:,}".replace(",", " ")
+        raise ValueError(
+            f"Навык слишком длинный: {size} символов при пределе {limit}. "
+            "Текст навыка целиком уходит в подсказку модели, поэтому его нужно "
+            "сократить или разбить на несколько навыков."
+        )
     slug = slugify(slug or name)
     folder = SKILLS_DIR / slug
     folder.mkdir(parents=True, exist_ok=True)

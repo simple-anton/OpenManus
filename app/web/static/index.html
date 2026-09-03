@@ -55,7 +55,7 @@
   main { flex: 1; min-width: 0; display: flex; flex-direction: column; background: var(--bg); }
   main > header { display: flex; align-items: center; gap: 10px; padding: 11px 18px; border-bottom: 1px solid var(--line); background: var(--panel); }
   #title { flex: 1; min-width: 0; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .switch { display: inline-flex; border: 1px solid var(--line); border-radius: 8px; overflow: hidden; }
+  .switch { display: inline-flex; flex: none; border: 1px solid var(--line); border-radius: 8px; overflow: hidden; }
   .switch button { border: 0; border-radius: 0; padding: 5px 12px; background: transparent; color: var(--muted); }
   .switch button.on { background: var(--accent-soft); color: var(--accent); font-weight: 600; }
   #progress { color: var(--muted); font-size: 12.5px; white-space: nowrap; }
@@ -137,7 +137,7 @@
   .chips button { font-size: 12.5px; padding: 6px 12px; border-radius: 20px; color: #4c4a45; }
   .chips button:hover { background: var(--panel); }
 
-  .picker { position: relative; }
+  .picker { position: relative; flex: none; }
   .menu { display: none; position: absolute; right: 0; top: 34px; z-index: 15; width: 320px; max-height: 400px; overflow-y: auto;
           background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 8px; box-shadow: 0 8px 24px rgba(30,28,25,.14); }
   .menu.open { display: block; }
@@ -145,7 +145,8 @@
   .menu label { display: flex; gap: 8px; align-items: flex-start; padding: 7px 8px; border-radius: 8px; cursor: pointer; }
   .menu label:hover { background: #f2efe9; }
   .menu label span { flex: 1; }
-  .menu label small { display: block; color: var(--muted); font-size: 11.5px; line-height: 1.4; }
+  .menu label small { display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical;
+                      overflow: hidden; color: var(--muted); font-size: 11.5px; line-height: 1.4; }
   .menu .note { color: var(--muted); font-size: 12px; padding: 8px; line-height: 1.5; }
   .menu-search { width: 100%; margin: 2px 0 6px; padding: 6px 9px; border: 1px solid var(--line); border-radius: 8px;
                  background: #fff; outline: none; font-size: 13px; }
@@ -179,6 +180,7 @@
   .files small { color: var(--muted); flex: none; }
   .toolcard { border: 1px solid var(--line); border-radius: 9px; padding: 9px 11px; margin-bottom: 8px; }
   .toolcard b { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12.5px; }
+  .clamped { display: -webkit-box; -webkit-line-clamp: 4; -webkit-box-orient: vertical; overflow: hidden; }
   .compat { flex: none; font-size: 11px; padding: 2px 8px; border-radius: 20px; }
   .compat.ok { background: #e4f3e8; color: #1f6b3f; }
   .compat.partial { background: #fbf0d2; color: #8a6212; }
@@ -1797,7 +1799,7 @@ function renderSkillsSection(form) {
     };
     head.append(edit, kill);
     box.appendChild(head);
-    box.appendChild(element("div", null, skill.description || "без описания"));
+    box.appendChild(element("div", "clamped", skill.description || "без описания"));
     const compat = skill.compatibility || {};
     if (compat.status === "partial") {
       box.appendChild(element("div", "fix",
@@ -2334,8 +2336,10 @@ async function refreshSkills() {
 
 function renderSkillsButton() {
   const attached = (sessionInfo && sessionInfo.skills) || [];
-  $("skills-button").textContent = attached.length ? "Навыки: " + attached.length : "Навыки";
   $("skills-button").classList.toggle("primary", attached.length > 0);
+  $("skills-button").title = attached.length
+    ? "Подключено навыков: " + attached.length + " — они показаны у поля ввода"
+    : "Методички, которым следует агент";
   renderAttachedSkills(attached);
 }
 
@@ -2451,7 +2455,12 @@ function fillSkillsList(list, menu) {
     if ((skill.compatibility || {}).status === "partial") {
       text.appendChild(compatBadge(skill.compatibility));
     }
-    if (skill.description) text.appendChild(element("small", null, skill.description));
+    if (skill.description) {
+      // published skills carry descriptions of a thousand characters; show the
+      // first lines here and keep the whole of it on hover
+      text.appendChild(element("small", null, skill.description));
+      label.title = skill.description;
+    }
     label.append(check, text);
     list.appendChild(label);
   });
