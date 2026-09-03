@@ -156,6 +156,11 @@
   .files small { color: var(--muted); flex: none; }
   .toolcard { border: 1px solid var(--line); border-radius: 9px; padding: 9px 11px; margin-bottom: 8px; }
   .toolcard b { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12.5px; }
+  .compat { flex: none; font-size: 11px; padding: 2px 8px; border-radius: 20px; }
+  .compat.ok { background: #e4f3e8; color: #1f6b3f; }
+  .compat.partial { background: #fbf0d2; color: #8a6212; }
+  .compat.blocking { background: #f7dcdc; color: #8f2b2b; }
+  .toolcard .fix { color: #8a6212; font-size: 12px; line-height: 1.5; margin-top: 6px; }
   .toolcard div { color: var(--muted); font-size: 12px; margin-top: 3px; line-height: 1.5; }
   #timeline { border-top: 1px solid var(--line); padding: 8px 10px; display: flex; gap: 6px; overflow-x: auto; align-items: center; min-height: 42px; }
   #timeline .step { flex: none; padding: 5px 9px; border: 1px solid var(--line); border-radius: 7px; font-size: 11.5px; cursor: pointer; color: var(--muted); background: var(--panel); white-space: nowrap; }
@@ -411,7 +416,7 @@ let currentId = null, source = null, mode = "agent";
 let steps = [], activeStep = -1, tab = "terminal", logs = [], files = [];
 let exchanges = [], preview = null, sessionInfo = null, appConfig = null;
 let settings = null, mcp = null, models = [], dialogSection = "llm";
-let skillList = [], skillCatalogue = [], apiTools = [];
+let skillList = [], skillCatalogue = [], apiTools = [], catalogueQuery = "";
 
 const ICONS = {
   python_execute: "\u{1F40D}", str_replace_editor: "\u{1F4DD}", ask_human: "\u{1F4AC}",
@@ -429,8 +434,12 @@ function tabFor(step) {
 async function api(path, options) {
   const response = await fetch(path, { headers: { "Content-Type": "application/json" }, ...options });
   if (!response.ok) {
-    const detail = await response.json().catch(() => ({}));
-    throw new Error(detail.detail || response.statusText);
+    const payload = await response.json().catch(() => ({}));
+    const detail = payload.detail;
+    const error = new Error(
+      typeof detail === "string" ? detail : (detail && detail.message) || response.statusText);
+    error.detail = detail;
+    throw error;
   }
   return response.json();
 }
@@ -1381,6 +1390,84 @@ function mcpRow(id, server, enabled) {
 }
 
 /* ------------------------------------------------------------ skills */
+let skillRefusal = null;
+
+const COMPAT_LABEL = {
+  ok: "работает здесь",
+  partial: "нужна донастройка",
+  blocking: "не работает здесь",
+};
+
+function compatBadge(compat) {
+  const status = (compat && compat.status) || "ok";
+  const badge = element("span", "compat " + status, COMPAT_LABEL[status]);
+  const notes = (compat && compat.notes) || [];
+  badge.title = notes.length ? notes.join("; ") : "Ничего чужого в навыке не найдено";
+  return badge;
+}
+
+function reportImport(skill) {
+  const compat = skill.compatibility || { status: "ok" };
+  const files = (skill.files || []).length;
+  let text = "Навык «" + skill.name + "» добавлен" + (files ? ", файлов: " + files : "");
+  if (compat.status === "partial") {
+    text += ". Нужна донастройка: " + (compat.notes || []).join("; ") +
+      (compat.advice ? ". " + compat.advice : "");
+  }
+  if (skill.warning) text += ". " + skill.warning;
+  dialogStatus(text, compat.status === "ok" ? "ok" : "");
+}
+
+async function importSkill(request, retry) {
+  dialogStatus("Импортирую…");
+  try {
+    const skill = await request(false);
+    skillRefusal = null;
+    await refreshSkills();
+    renderDialog();
+    reportImport(skill);
+  } catch (error) {
+    if (error.detail && error.detail.reason === "incompatible") {
+      skillRefusal = { detail: error.detail, retry: retry || request };
+      renderDialog();
+      dialogStatus(error.detail.message, "bad");
+      return;
+    }
+    dialogStatus("Не удалось: " + error.message, "bad");
+  }
+}
+
+function refusalCard() {
+  const detail = skillRefusal.detail;
+  const box = element("div", "card error");
+  const head = element("h4", null, "Навык отклонён");
+  head.appendChild(element("span", "badge", "не работает здесь"));
+  box.appendChild(head);
+  box.appendChild(element("div", "text strong", detail.message));
+  (detail.notes || []).forEach((note) => box.appendChild(element("div", "text", "— " + note)));
+  box.appendChild(element("div", "advice", detail.advice));
+  const row = element("div", "server-row");
+  const anyway = element("button", null, "Импортировать только текст");
+  anyway.onclick = async () => {
+    const retry = skillRefusal.retry;
+    dialogStatus("Импортирую только методику…");
+    try {
+      const skill = await retry(true);
+      skillRefusal = null;
+      await refreshSkills();
+      renderDialog();
+      reportImport(skill);
+    } catch (error) {
+      dialogStatus("Не удалось: " + error.message, "bad");
+    }
+  };
+  const dismiss = element("button", "ghost", "Закрыть");
+  dismiss.onclick = () => { skillRefusal = null; renderDialog(); dialogStatus(""); };
+  row.append(anyway, dismiss);
+  box.appendChild(row);
+  return box;
+}
+
 function renderSkillsSection(form) {
   form.appendChild(element("div", "section-title", "Навыки — методички для агента"));
   form.appendChild(element("div", "section-note", SECTIONS.find((item) => item.id === "skills").note));
@@ -1388,11 +1475,14 @@ function renderSkillsSection(form) {
     "Навык описывает, как выполнять задачу определённого типа. Выбранные навыки " +
     "подмешиваются в инструкции агента. Для локальной модели это самый заметный прирост качества."));
 
+  if (skillRefusal) form.appendChild(refusalCard());
+
   const list = element("div", "skill-list");
   (skillList || []).forEach((skill) => {
     const box = element("div", "toolcard");
     const head = element("div", "server-row");
     head.appendChild(element("b", null, skill.name));
+    head.appendChild(compatBadge(skill.compatibility));
     const edit = element("button", "ghost", "Открыть");
     edit.style.marginLeft = "auto";
     edit.onclick = () => openSkillEditor(skill.slug);
@@ -1406,6 +1496,11 @@ function renderSkillsSection(form) {
     head.append(edit, kill);
     box.appendChild(head);
     box.appendChild(element("div", null, skill.description || "без описания"));
+    const compat = skill.compatibility || {};
+    if (compat.status === "partial") {
+      box.appendChild(element("div", "fix",
+        (compat.notes || []).join("; ") + (compat.advice ? " — " + compat.advice : "")));
+    }
     list.appendChild(box);
   });
   if (!skillList.length) list.appendChild(element("div", "note", "Навыков пока нет"));
@@ -1425,6 +1520,21 @@ function renderSkillsSection(form) {
   form.appendChild(element("div", "note",
     "Это открытый набор Anthropic в том же формате — не те навыки, что показывает Manus: " +
     "их тексты нигде не опубликованы. Загружается вся папка навыка вместе со вспомогательными файлами."));
+
+  const search = document.createElement("input");
+  search.type = "text";
+  search.placeholder = "Поиск по названию и описанию";
+  search.value = catalogueQuery;
+  search.style.cssText = "width:100%;border:1px solid var(--line);border-radius:8px;padding:7px 10px;margin-bottom:10px";
+  search.oninput = () => {
+    catalogueQuery = search.value;
+    const query = catalogueQuery.trim().toLowerCase();
+    catalogue.querySelectorAll(".toolcard").forEach((card) => {
+      card.hidden = Boolean(query) && !card.textContent.toLowerCase().includes(query);
+    });
+  };
+  form.appendChild(search);
+
   const catalogue = element("div", "cat");
   skillCatalogue.forEach((item) => {
     const installed = skillList.some((skill) => skill.name.toLowerCase() === item.title.toLowerCase());
@@ -1434,27 +1544,21 @@ function renderSkillsSection(form) {
     const add = element("button", installed ? "ghost" : null, installed ? "уже добавлен" : "Добавить");
     add.disabled = installed;
     add.style.marginLeft = "auto";
-    add.onclick = async () => {
-      add.disabled = true;
-      dialogStatus("Скачиваю «" + item.title + "»…");
-      try {
-        const skill = await api("/api/skills/import", {
-          method: "POST", body: JSON.stringify({ url: item.url }),
-        });
-        await refreshSkills();
-        renderDialog();
-        const files = (skill.files || []).length;
-        dialogStatus("Навык «" + skill.name + "» добавлен" +
-          (files ? ", файлов вместе с ним: " + files : "") +
-          (skill.warning ? ". " + skill.warning : ""), skill.warning ? "" : "ok");
-      } catch (error) {
-        add.disabled = false;
-        dialogStatus("Не удалось: " + error.message, "bad");
-      }
-    };
+    add.onclick = () => importSkill((force) => api("/api/skills/import", {
+      method: "POST", body: JSON.stringify({ url: item.url, force: force }),
+    }));
     head.appendChild(add);
     box.appendChild(head);
     box.appendChild(element("div", null, item.description));
+    const source = document.createElement("a");
+    source.href = item.url;
+    source.target = "_blank";
+    source.rel = "noopener";
+    source.textContent = "исходник на GitHub";
+    source.style.cssText = "font-size:11.5px;color:var(--accent)";
+    box.appendChild(source);
+    const query = catalogueQuery.trim().toLowerCase();
+    if (query && !box.textContent.toLowerCase().includes(query)) box.hidden = true;
     catalogue.appendChild(box);
   });
   form.appendChild(catalogue);
@@ -1465,22 +1569,9 @@ function renderSkillsSection(form) {
   url.className = "rest";
   url.placeholder = "https://github.com/владелец/репозиторий или ссылка на SKILL.md";
   const go = element("button", null, "Импортировать");
-  go.onclick = async () => {
-    dialogStatus("Скачиваю…");
-    try {
-      const skill = await api("/api/skills/import", {
-        method: "POST", body: JSON.stringify({ url: url.value.trim() }),
-      });
-      await refreshSkills();
-      renderDialog();
-      const files = (skill.files || []).length;
-      dialogStatus("Навык «" + skill.name + "» добавлен" +
-        (files ? ", файлов вместе с ним: " + files : "") +
-        (skill.warning ? ". " + skill.warning : ""), skill.warning ? "" : "ok");
-    } catch (error) {
-      dialogStatus(error.message, "bad");
-    }
-  };
+  go.onclick = () => importSkill((force) => api("/api/skills/import", {
+    method: "POST", body: JSON.stringify({ url: url.value.trim(), force: force }),
+  }));
   urlRow.append(url, go);
   form.appendChild(urlRow);
 }
@@ -1918,6 +2009,9 @@ function renderSkillsMenu() {
     };
     check.dataset.slug = skill.slug;
     const text = element("span", null, skill.name);
+    if ((skill.compatibility || {}).status === "partial") {
+      text.appendChild(compatBadge(skill.compatibility));
+    }
     if (skill.description) text.appendChild(element("small", null, skill.description));
     label.append(check, text);
     menu.appendChild(label);
@@ -1944,20 +2038,8 @@ $("skill-file").onchange = async (event) => {
   if (!file) return;
 
   if (file.name.toLowerCase().endsWith(".zip")) {
-    dialogStatus("Распаковываю «" + file.name + "»…");
-    try {
-      const response = await fetch("/api/skills/archive", { method: "PUT", body: file });
-      const skill = await response.json();
-      if (!response.ok) throw new Error(skill.detail || response.statusText);
-      await refreshSkills();
-      renderDialog();
-      const files = (skill.files || []).length;
-      dialogStatus("Навык «" + skill.name + "» добавлен" +
-        (files ? ", файлов вместе с ним: " + files : "") +
-        (skill.warning ? ". " + skill.warning : ""), skill.warning ? "" : "ok");
-    } catch (error) {
-      dialogStatus("Не удалось: " + error.message, "bad");
-    }
+    await importSkill((force) => api("/api/skills/archive?force=" + (force ? "true" : "false"),
+      { method: "PUT", body: file, headers: {} }));
     return;
   }
 

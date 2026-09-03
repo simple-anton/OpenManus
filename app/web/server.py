@@ -57,6 +57,7 @@ class SkillRequest(BaseModel):
 
 class ImportRequest(BaseModel):
     url: str
+    force: bool = False
 
 
 class ApiToolsRequest(BaseModel):
@@ -107,6 +108,17 @@ def _resolve_in_workspace(path: str, session_id: Optional[str]) -> Path:
     if not target.is_file() or root not in target.parents:
         raise HTTPException(status_code=404, detail="File not found")
     return target
+
+
+def _incompatible(exc) -> Dict[str, Any]:
+    """A refusal the interface can explain and offer a way around."""
+    return {
+        "reason": "incompatible",
+        "message": f"Навык «{exc.name}» не заработает в этой сборке.",
+        "notes": exc.verdict["notes"],
+        "advice": "Он рассчитан на среду, откуда его выгрузили: без неё скрипты навыка "
+        "не запустятся. Можно взять только текстовую методику — без скриптов.",
+    }
 
 
 def _get_session(session_id: str) -> Session:
@@ -468,17 +480,23 @@ def create_app() -> FastAPI:
         return {"status": "deleted"}
 
     @app.put("/api/skills/archive")
-    async def upload_skill_archive(request: Request) -> Dict[str, Any]:
+    async def upload_skill_archive(
+        request: Request, force: bool = False
+    ) -> Dict[str, Any]:
         """A zipped skill folder, as exported from another agent."""
         try:
-            return skills_store.import_archive(await request.body())
+            return skills_store.import_archive(await request.body(), force=force)
+        except skills_store.Incompatible as exc:
+            raise HTTPException(status_code=409, detail=_incompatible(exc))
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc))
 
     @app.post("/api/skills/import")
     async def import_skill(request: ImportRequest) -> Dict[str, Any]:
         try:
-            return await skills_store.import_from_url(request.url)
+            return await skills_store.import_from_url(request.url, force=request.force)
+        except skills_store.Incompatible as exc:
+            raise HTTPException(status_code=409, detail=_incompatible(exc))
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc))
 

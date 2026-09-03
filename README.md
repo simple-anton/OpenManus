@@ -194,8 +194,11 @@ Three things extend what the agent can do, all from the same dialog:
   skill folder, scripts and references included, and the agent is told where those
   files live. A zipped skill folder exported from another agent can be uploaded as
   is: paths pointing at that agent's sandbox are rewritten to this installation,
-  and anything the skill needs that only exists there (a host-specific runtime or
-  connector) is reported as a warning rather than failing silently later. The dialog also lists verified public skills from Anthropic's open
+  and every import is judged: a skill that only needs a data source wired up is
+  accepted and marked as needing setup, one that cannot run here at all - because
+  its scripts call the runtime of the agent it came from - is refused with the
+  reasons, and its text can still be taken on its own if you ask for it. The
+  status shows on the skill in the list and in the task picker. The dialog also lists verified public skills from Anthropic's open
   repository for one-click import. Attach the ones a task needs and their text is
   appended to the agent's system prompt.
 - **Plugins** - a catalogue of ready MCP servers (Python ones run through `uvx`,

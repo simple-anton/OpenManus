@@ -7,6 +7,7 @@ skills attached, their text is appended to the agent's system prompt.
 """
 
 import io
+import json
 import re
 import shutil
 import zipfile
@@ -25,16 +26,52 @@ RAW_HOST = "https://raw.githubusercontent.com"
 GITHUB_API = "https://api.github.com"
 # where Manus keeps skills inside its own sandbox; rewritten to our folder
 FOREIGN_ROOTS = ("/home/ubuntu/skills/", "/mnt/skills/", "/opt/skills/")
-# markers of things that exist only inside the hosted Manus
-MANUS_ONLY = {
-    "/opt/.manus": "скрипты навыка обращаются к внутренней среде Manus",
-    "data_api": "скрипты используют ApiClient из песочницы Manus",
-    "sandbox-runtime": "скрипты рассчитывают на runtime Manus",
-    "Yahoo/get_": "навык вызывает коннектор Yahoo из Manus",
-    "Twitter/": "навык вызывает коннектор Twitter из Manus",
-    "LinkedIn/": "навык вызывает коннектор LinkedIn из Manus",
-    "manus-api": "навык обращается к API самого Manus",
-}
+# Things that exist only inside the agent a skill came from. "blocking" means
+# the skill cannot work here at all; "partial" means the method still applies
+# but some data source has to be wired up locally first.
+FOREIGN_MARKERS = [
+    {
+        "match": "/opt/.manus",
+        "level": "blocking",
+        "note": "скрипты навыка обращаются к внутренней среде Manus (/opt/.manus)",
+    },
+    {
+        "match": "sandbox-runtime",
+        "level": "blocking",
+        "note": "скрипты рассчитаны на runtime песочницы Manus",
+    },
+    {
+        "match": "from data_api",
+        "level": "blocking",
+        "note": "скрипты импортируют ApiClient из песочницы Manus",
+    },
+    {
+        "match": "Yahoo/get_",
+        "level": "partial",
+        "note": "навык вызывает коннектор Yahoo из Manus",
+        "advice": "Опишите эквивалентный источник котировок в «Настройки → Свои API» "
+        "и замените в тексте навыка вызовы вида Yahoo/get_stock_chart на имя своего инструмента.",
+    },
+    {
+        "match": "Twitter/",
+        "level": "partial",
+        "note": "навык вызывает коннектор Twitter из Manus",
+        "advice": "Подключите свой источник данных X/Twitter через «Свои API» или MCP-плагин "
+        "и поправьте вызовы в тексте навыка.",
+    },
+    {
+        "match": "LinkedIn/",
+        "level": "partial",
+        "note": "навык вызывает коннектор LinkedIn из Manus",
+        "advice": "Подключите источник данных LinkedIn через «Свои API» и поправьте вызовы в тексте.",
+    },
+    {
+        "match": "manus-api",
+        "level": "partial",
+        "note": "навык обращается к API самого Manus",
+        "advice": "Эти вызовы здесь не работают: уберите их из текста или замените своими инструментами.",
+    },
+]
 # a skill folder may carry scripts and references; keep the import bounded
 MAX_BUNDLE_FILES = 40
 MAX_BUNDLE_BYTES = 512 * 1024
@@ -144,6 +181,8 @@ def read_skill(slug: str) -> Optional[Dict[str, Any]]:
         "description": parsed["meta"].get("description", ""),
         "body": parsed["body"],
         "chars": len(parsed["body"]),
+        "compatibility": load_compatibility(slug),
+        "files": bundle_files(slug),
     }
 
 
@@ -172,20 +211,56 @@ def localise(text: str, folder: Path) -> str:
     return text
 
 
-def compatibility_notes(folder: Path) -> List[str]:
-    """What in this skill will not work outside the agent it came from."""
-    found = []
+def inspect_compatibility(texts: Dict[str, str]) -> Dict[str, Any]:
+    """Verdict on a skill: works here, needs wiring up, or cannot work at all."""
+    notes, advice = [], []
+    level = "ok"
+    for marker in FOREIGN_MARKERS:
+        where = [name for name, text in texts.items() if marker["match"] in text]
+        if not where:
+            continue
+        notes.append(f"{marker['note']} ({', '.join(sorted(where)[:3])})")
+        if marker.get("advice") and marker["advice"] not in advice:
+            advice.append(marker["advice"])
+        if marker["level"] == "blocking":
+            level = "blocking"
+        elif level != "blocking":
+            level = "partial"
+    return {"status": level, "notes": notes, "advice": " ".join(advice)}
+
+
+def read_texts(folder: Path) -> Dict[str, str]:
+    """Readable contents of a skill folder, keyed by relative path."""
+    texts = {}
     for path in folder.rglob("*"):
-        if not path.is_file() or path.stat().st_size > 512 * 1024:
+        if not path.is_file() or path.stat().st_size > MAX_BUNDLE_BYTES:
             continue
         try:
-            text = path.read_text(encoding="utf-8", errors="ignore")
+            texts[str(path.relative_to(folder))] = path.read_text(
+                encoding="utf-8", errors="ignore"
+            )
         except OSError:
             continue
-        for marker, note in MANUS_ONLY.items():
-            if marker in text and note not in found:
-                found.append(note)
-    return found
+    return texts
+
+
+def save_compatibility(slug: str, verdict: Dict[str, Any]) -> None:
+    try:
+        (SKILLS_DIR / slug / "compatibility.json").write_text(
+            json.dumps(verdict, ensure_ascii=False), encoding="utf-8"
+        )
+    except OSError as exc:
+        logger.warning(f"Could not store the verdict for {slug}: {exc}")
+
+
+def load_compatibility(slug: str) -> Dict[str, Any]:
+    path = SKILLS_DIR / slug / "compatibility.json"
+    if not path.is_file():
+        return {"status": "ok", "notes": [], "advice": ""}
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError):
+        return {"status": "ok", "notes": [], "advice": ""}
 
 
 def bundle_files(slug: str) -> List[str]:
@@ -196,7 +271,7 @@ def bundle_files(slug: str) -> List[str]:
     return sorted(
         str(path.relative_to(folder))
         for path in folder.rglob("*")
-        if path.is_file() and path.name != "SKILL.md"
+        if path.is_file() and path.name not in {"SKILL.md", "compatibility.json"}
     )
 
 
@@ -254,7 +329,50 @@ def _raw_candidates(url: str) -> List[str]:
     return candidates
 
 
-def import_archive(data: bytes) -> Dict[str, Any]:
+class Incompatible(ValueError):
+    """A skill that cannot work in this installation at all."""
+
+    def __init__(self, verdict: Dict[str, Any], name: str):
+        self.verdict = verdict
+        self.name = name
+        super().__init__("; ".join(verdict["notes"]))
+
+
+def _finish_import(
+    slug: str, name: str, description: str, body: str, folder: Path, force: bool
+) -> Dict[str, Any]:
+    """Judge what was unpacked, then keep it, trim it, or refuse it."""
+    texts = read_texts(folder)
+    texts["SKILL.md"] = body
+    verdict = inspect_compatibility(texts)
+
+    if verdict["status"] == "blocking" and not force:
+        shutil.rmtree(folder, ignore_errors=True)
+        raise Incompatible(verdict, name)
+
+    if verdict["status"] == "blocking":  # forced: keep the method, drop what cannot run
+        for path in folder.rglob("*"):
+            if path.is_file() and path.name != "SKILL.md":
+                path.unlink()
+        for path in sorted(folder.rglob("*"), reverse=True):
+            if path.is_dir():
+                path.rmdir()
+        verdict = {
+            "status": "partial",
+            "notes": verdict["notes"],
+            "advice": "Импортирована только текстовая методика: скрипты навыка работают лишь "
+            "внутри той среды, откуда он пришёл. Всё, что в тексте опирается на них, "
+            "придётся заменить своими инструментами.",
+        }
+
+    skill = write_skill(slug, name, description, body)
+    save_compatibility(skill["slug"], verdict)
+    skill["compatibility"] = verdict
+    skill["files"] = bundle_files(skill["slug"])
+    return skill
+
+
+def import_archive(data: bytes, force: bool = False) -> Dict[str, Any]:
     """Take a zipped skill folder, as exported by another agent."""
     if len(data) > MAX_ARCHIVE_BYTES:
         raise ValueError("Архив слишком большой")
@@ -280,7 +398,7 @@ def import_archive(data: bytes) -> Dict[str, Any]:
     shutil.rmtree(folder, ignore_errors=True)
     folder.mkdir(parents=True, exist_ok=True)
 
-    saved = []
+    saved = 0
     for item in members:
         if item is manifest or not item.filename.startswith(root):
             continue
@@ -288,23 +406,24 @@ def import_archive(data: bytes) -> Dict[str, Any]:
         target = (folder / relative).resolve()
         if folder.resolve() not in target.parents:
             continue  # never let an archive write outside its folder
-        if item.file_size > MAX_BUNDLE_BYTES or len(saved) >= MAX_BUNDLE_FILES:
+        if item.file_size > MAX_BUNDLE_BYTES or saved >= MAX_BUNDLE_FILES:
             continue
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_bytes(archive.read(item))
-        saved.append(relative)
+        saved += 1
 
-    body = localise(parsed["body"], folder)
-    skill = write_skill(slug, name, parsed["meta"].get("description", ""), body)
-    skill["files"] = saved
-    notes = compatibility_notes(folder)
-    if notes:
-        skill["warning"] = (
-            "Навык рассчитан на среду Manus: "
-            + "; ".join(notes)
-            + ". Текст методики применим, но эти вызовы здесь не сработают."
-        )
-    logger.info(f"Imported skill {slug} from archive with {len(saved)} file(s)")
+    skill = _finish_import(
+        slug,
+        name,
+        parsed["meta"].get("description", ""),
+        localise(parsed["body"], folder),
+        folder,
+        force,
+    )
+    logger.info(
+        f"Imported skill {skill['slug']} from archive: "
+        f"{len(skill['files'])} file(s), status {skill['compatibility']['status']}"
+    )
     return skill
 
 
@@ -321,7 +440,7 @@ def _repo_parts(url: str):
 
 
 async def _import_folder(
-    client: httpx.AsyncClient, url: str
+    client: httpx.AsyncClient, url: str, force: bool = False
 ) -> Optional[Dict[str, Any]]:
     """Bring the whole skill folder, not just SKILL.md.
 
@@ -367,9 +486,8 @@ async def _import_folder(
         return None
     parsed = _parse(manifest.text)
     name = parsed["meta"].get("name") or (root.strip("/").split("/")[-1] or repo)
-    skill = write_skill(
-        slugify(name), name, parsed["meta"].get("description", ""), parsed["body"]
-    )
+    slug = slugify(name)
+    folder = SKILLS_DIR / slug
 
     saved = []
     for item in blobs:
@@ -384,23 +502,33 @@ async def _import_folder(
             )
             if payload.status_code != 200:
                 continue
-            target = SKILLS_DIR / skill["slug"] / relative
+            target = folder / relative
             target.parent.mkdir(parents=True, exist_ok=True)
             target.write_bytes(payload.content)
             saved.append(relative)
         except (httpx.HTTPError, OSError) as exc:
             logger.warning(f"Skipped {item['path']}: {exc}")
 
-    logger.info(f"Imported skill {skill['slug']} with {len(saved)} extra file(s)")
-    skill["files"] = saved
+    skill = _finish_import(
+        slug,
+        name,
+        parsed["meta"].get("description", ""),
+        localise(parsed["body"], folder),
+        folder,
+        force,
+    )
+    logger.info(
+        f"Imported skill {skill['slug']} from {owner}/{repo}: "
+        f"{len(skill['files'])} file(s), status {skill['compatibility']['status']}"
+    )
     return skill
 
 
-async def import_from_url(url: str) -> Dict[str, Any]:
+async def import_from_url(url: str, force: bool = False) -> Dict[str, Any]:
     """Fetch a skill published on GitHub (or any raw markdown URL)."""
     errors = []
     async with httpx.AsyncClient(timeout=30, follow_redirects=True) as client:
-        whole = await _import_folder(client, url)
+        whole = await _import_folder(client, url, force)
         if whole is not None:
             return whole
         for candidate in _raw_candidates(url):
@@ -415,18 +543,22 @@ async def import_from_url(url: str) -> Dict[str, Any]:
             parsed = _parse(response.text)
             name = parsed["meta"].get("name") or Path(candidate).parent.name
             logger.info(f"Imported skill from {candidate}")
-            skill = write_skill(
-                slugify(name),
+            slug = slugify(name)
+            folder = SKILLS_DIR / slug
+            folder.mkdir(parents=True, exist_ok=True)
+            skill = _finish_import(
+                slug,
                 name,
                 parsed["meta"].get("description", ""),
-                parsed["body"],
+                localise(parsed["body"], folder),
+                folder,
+                force,
             )
             # warn when the text leans on files we did not bring along
-            if re.search(r"(scripts|references|assets|templates)/", parsed["body"]):
+            if re.search(r"(scripts|references|assets|templates)/", skill["body"]):
                 skill["warning"] = (
                     "Навык ссылается на свои вспомогательные файлы, но скачан только SKILL.md. "
                     "Попробуйте импортировать ссылку на папку навыка на github.com."
                 )
-            skill["files"] = []
             return skill
     raise ValueError("Не удалось скачать навык. " + "; ".join(errors[:3]))
