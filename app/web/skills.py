@@ -6,8 +6,10 @@ use, so a skill published on GitHub can be imported as is. When a task has
 skills attached, their text is appended to the agent's system prompt.
 """
 
+import io
 import re
 import shutil
+import zipfile
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -21,9 +23,22 @@ SKILLS_DIR = PROJECT_ROOT / "config" / "skills"
 MAX_SKILL_CHARS = 60_000
 RAW_HOST = "https://raw.githubusercontent.com"
 GITHUB_API = "https://api.github.com"
+# where Manus keeps skills inside its own sandbox; rewritten to our folder
+FOREIGN_ROOTS = ("/home/ubuntu/skills/", "/mnt/skills/", "/opt/skills/")
+# markers of things that exist only inside the hosted Manus
+MANUS_ONLY = {
+    "/opt/.manus": "скрипты навыка обращаются к внутренней среде Manus",
+    "data_api": "скрипты используют ApiClient из песочницы Manus",
+    "sandbox-runtime": "скрипты рассчитывают на runtime Manus",
+    "Yahoo/get_": "навык вызывает коннектор Yahoo из Manus",
+    "Twitter/": "навык вызывает коннектор Twitter из Manus",
+    "LinkedIn/": "навык вызывает коннектор LinkedIn из Manus",
+    "manus-api": "навык обращается к API самого Manus",
+}
 # a skill folder may carry scripts and references; keep the import bounded
 MAX_BUNDLE_FILES = 40
 MAX_BUNDLE_BYTES = 512 * 1024
+MAX_ARCHIVE_BYTES = 20 * 1024 * 1024
 
 
 # Verified public skills in the same format, from Anthropic's open repository.
@@ -150,6 +165,29 @@ def delete_skill(slug: str) -> None:
         shutil.rmtree(folder)
 
 
+def localise(text: str, folder: Path) -> str:
+    """Point paths from another agent's sandbox at this installation."""
+    for root in FOREIGN_ROOTS:
+        text = re.sub(re.escape(root) + r"[\w.-]+/?", str(folder) + "/", text)
+    return text
+
+
+def compatibility_notes(folder: Path) -> List[str]:
+    """What in this skill will not work outside the agent it came from."""
+    found = []
+    for path in folder.rglob("*"):
+        if not path.is_file() or path.stat().st_size > 512 * 1024:
+            continue
+        try:
+            text = path.read_text(encoding="utf-8", errors="ignore")
+        except OSError:
+            continue
+        for marker, note in MANUS_ONLY.items():
+            if marker in text and note not in found:
+                found.append(note)
+    return found
+
+
 def bundle_files(slug: str) -> List[str]:
     """Extra files that came with the skill, relative to its folder."""
     folder = SKILLS_DIR / slug
@@ -214,6 +252,60 @@ def _raw_candidates(url: str) -> List[str]:
         if path:
             candidates.append(f"{prefix}/{path}")
     return candidates
+
+
+def import_archive(data: bytes) -> Dict[str, Any]:
+    """Take a zipped skill folder, as exported by another agent."""
+    if len(data) > MAX_ARCHIVE_BYTES:
+        raise ValueError("Архив слишком большой")
+    try:
+        archive = zipfile.ZipFile(io.BytesIO(data))
+    except zipfile.BadZipFile as exc:
+        raise ValueError(f"Это не ZIP-архив: {exc}") from exc
+
+    members = [item for item in archive.infolist() if not item.is_dir()]
+    if len(members) > MAX_BUNDLE_FILES * 2:
+        raise ValueError("В архиве слишком много файлов")
+
+    manifests = [item for item in members if Path(item.filename).name == "SKILL.md"]
+    if not manifests:
+        raise ValueError("В архиве нет файла SKILL.md")
+    manifest = min(manifests, key=lambda item: item.filename.count("/"))
+    root = manifest.filename[: -len("SKILL.md")]
+
+    parsed = _parse(archive.read(manifest).decode("utf-8", errors="replace"))
+    name = parsed["meta"].get("name") or (root.strip("/").split("/")[-1] or "skill")
+    slug = slugify(name)
+    folder = SKILLS_DIR / slug
+    shutil.rmtree(folder, ignore_errors=True)
+    folder.mkdir(parents=True, exist_ok=True)
+
+    saved = []
+    for item in members:
+        if item is manifest or not item.filename.startswith(root):
+            continue
+        relative = item.filename[len(root) :]
+        target = (folder / relative).resolve()
+        if folder.resolve() not in target.parents:
+            continue  # never let an archive write outside its folder
+        if item.file_size > MAX_BUNDLE_BYTES or len(saved) >= MAX_BUNDLE_FILES:
+            continue
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_bytes(archive.read(item))
+        saved.append(relative)
+
+    body = localise(parsed["body"], folder)
+    skill = write_skill(slug, name, parsed["meta"].get("description", ""), body)
+    skill["files"] = saved
+    notes = compatibility_notes(folder)
+    if notes:
+        skill["warning"] = (
+            "Навык рассчитан на среду Manus: "
+            + "; ".join(notes)
+            + ". Текст методики применим, но эти вызовы здесь не сработают."
+        )
+    logger.info(f"Imported skill {slug} from archive with {len(saved)} file(s)")
+    return skill
 
 
 def _repo_parts(url: str):

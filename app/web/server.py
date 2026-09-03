@@ -467,6 +467,14 @@ def create_app() -> FastAPI:
                 session.set_skills([s for s in session.skills if s != slug])
         return {"status": "deleted"}
 
+    @app.put("/api/skills/archive")
+    async def upload_skill_archive(request: Request) -> Dict[str, Any]:
+        """A zipped skill folder, as exported from another agent."""
+        try:
+            return skills_store.import_archive(await request.body())
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc))
+
     @app.post("/api/skills/import")
     async def import_skill(request: ImportRequest) -> Dict[str, Any]:
         try:

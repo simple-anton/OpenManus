@@ -257,7 +257,7 @@
     <div class="hint" id="hint">Enter — отправить, Shift+Enter — перенос строки</div>
   </form>
   <input type="file" id="file-input" multiple hidden />
-  <input type="file" id="skill-file" accept=".md,.txt" hidden />
+  <input type="file" id="skill-file" accept=".md,.txt,.zip" hidden />
 </main>
 
 <section id="computer">
@@ -1415,7 +1415,8 @@ function renderSkillsSection(form) {
   actions.style.marginTop = "12px";
   const create = element("button", null, "Создать навык");
   create.onclick = () => openSkillEditor(null);
-  const upload = element("button", null, "Загрузить файл");
+  const upload = element("button", null, "Загрузить файл или ZIP");
+  upload.title = "Файл SKILL.md или ZIP-архив с папкой навыка — например, выгруженный из другого агента";
   upload.onclick = () => $("skill-file").click();
   actions.append(create, upload);
   form.appendChild(actions);
@@ -1941,6 +1942,25 @@ $("skill-file").onchange = async (event) => {
   const file = event.target.files[0];
   event.target.value = "";
   if (!file) return;
+
+  if (file.name.toLowerCase().endsWith(".zip")) {
+    dialogStatus("Распаковываю «" + file.name + "»…");
+    try {
+      const response = await fetch("/api/skills/archive", { method: "PUT", body: file });
+      const skill = await response.json();
+      if (!response.ok) throw new Error(skill.detail || response.statusText);
+      await refreshSkills();
+      renderDialog();
+      const files = (skill.files || []).length;
+      dialogStatus("Навык «" + skill.name + "» добавлен" +
+        (files ? ", файлов вместе с ним: " + files : "") +
+        (skill.warning ? ". " + skill.warning : ""), skill.warning ? "" : "ok");
+    } catch (error) {
+      dialogStatus("Не удалось: " + error.message, "bad");
+    }
+    return;
+  }
+
   const text = await file.text();
   const match = text.match(/^---\s*\nname:\s*(.+?)\n(?:description:\s*(.+?)\n)?---\s*\n([\s\S]*)$/);
   const payload = match
@@ -1948,7 +1968,7 @@ $("skill-file").onchange = async (event) => {
     : { slug: "", name: file.name.replace(/\.[^.]+$/, ""), description: "", body: text };
   try {
     await api("/api/skills", { method: "POST", body: JSON.stringify(payload) });
-    skillList = (await api("/api/skills")).skills;
+    await refreshSkills();
     renderDialog();
     dialogStatus("Навык загружен", "ok");
   } catch (error) {
