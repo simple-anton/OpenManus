@@ -118,7 +118,19 @@
   .card details pre.block { margin: 9px 0 0; max-height: 260px; overflow: auto; }
 
   form.composer-form { padding: 12px 26px 18px; }
-  .composer { max-width: 760px; margin: 0 auto; display: flex; gap: 9px; align-items: flex-end; background: var(--panel); border: 1px solid var(--line); border-radius: 13px; padding: 8px 8px 8px 14px; }
+  .composer { max-width: 760px; margin: 0 auto; display: flex; flex-direction: column; gap: 6px; background: var(--panel); border: 1px solid var(--line); border-radius: 13px; padding: 8px 8px 8px 14px; }
+  .composer-row { display: flex; gap: 9px; align-items: flex-end; }
+  /* attached skills, shown as pills inside the input box */
+  .attached { display: flex; flex-wrap: wrap; gap: 6px; padding: 2px 0 1px; }
+  .attached[hidden] { display: none; }
+  .attached .pill { display: inline-flex; align-items: center; gap: 5px; font-size: 12px; line-height: 1.5;
+                    background: #ece9e2; color: #4c4a45; border-radius: 20px; padding: 2px 5px 2px 9px; }
+  .attached .pill.partial { background: #fbf0d2; color: #8a6212; }
+  .attached .pill button { background: none; border: 0; padding: 0 3px; font-size: 13px; line-height: 1; color: inherit; opacity: .55; border-radius: 20px; }
+  .attached .pill button:hover { opacity: 1; color: #8f2b2b; }
+  .skill-chip { display: inline-flex; align-items: center; gap: 5px; padding: 6px 9px; }
+  .skill-chip.on { background: #ece9e2; border-color: #ddd8ce; }
+  .skill-chip b { font-size: 11.5px; font-weight: 600; }
   textarea#prompt { flex: 1; resize: none; border: 0; outline: none; background: transparent; height: 24px; max-height: 180px; padding: 4px 0; line-height: 1.5; }
   .hint { max-width: 760px; margin: 6px auto 0; color: var(--muted); font-size: 11.5px; }
   .chips { max-width: 760px; margin: 10px auto 0; display: flex; flex-wrap: wrap; gap: 8px; }
@@ -129,6 +141,7 @@
   .menu { display: none; position: absolute; right: 0; top: 34px; z-index: 15; width: 320px; max-height: 320px; overflow-y: auto;
           background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 8px; box-shadow: 0 8px 24px rgba(30,28,25,.14); }
   .menu.open { display: block; }
+  .menu.up { top: auto; bottom: 40px; }
   .menu label { display: flex; gap: 8px; align-items: flex-start; padding: 7px 8px; border-radius: 8px; cursor: pointer; }
   .menu label:hover { background: #f2efe9; }
   .menu label span { flex: 1; }
@@ -263,9 +276,16 @@
 
   <form id="composer-form" class="composer-form">
     <div class="composer">
-      <textarea id="prompt" rows="1" placeholder="Что нужно сделать?"></textarea>
-      <button type="button" id="attach" title="Положить файл в папку задачи, чтобы агент мог с ним работать">Файл</button>
-      <button class="primary" type="submit">Отправить</button>
+      <div class="attached" id="attached-skills" hidden></div>
+      <div class="composer-row">
+        <textarea id="prompt" rows="1" placeholder="Что нужно сделать?"></textarea>
+        <div class="picker">
+          <button type="button" id="skills-chip" class="skill-chip" title="Навыки — методички, которым агент следует в этой задаче">&#129513;</button>
+          <div id="skills-menu-composer" class="menu up"></div>
+        </div>
+        <button type="button" id="attach" title="Положить файл в папку задачи, чтобы агент мог с ним работать">Файл</button>
+        <button class="primary" type="submit">Отправить</button>
+      </div>
     </div>
     <div class="chips" id="chips"></div>
     <div class="hint" id="hint">Enter — отправить, Shift+Enter — перенос строки</div>
@@ -2307,10 +2327,56 @@ function renderSkillsButton() {
   const attached = (sessionInfo && sessionInfo.skills) || [];
   $("skills-button").textContent = attached.length ? "Навыки: " + attached.length : "Навыки";
   $("skills-button").classList.toggle("primary", attached.length > 0);
+  renderAttachedSkills(attached);
 }
 
-function renderSkillsMenu() {
-  const menu = $("skills-menu");
+/* The skills of this task, shown where the task is typed: a pill per skill
+   with a cross to take it off, and a counter on the puzzle button. */
+function renderAttachedSkills(attached) {
+  const chip = $("skills-chip");
+  chip.innerHTML = "&#129513;";
+  chip.classList.toggle("on", attached.length > 0);
+  if (attached.length) chip.appendChild(element("b", null, String(attached.length)));
+  chip.title = attached.length
+    ? "Подключено навыков: " + attached.length + ". Нажмите, чтобы изменить набор"
+    : "Навыки — методички, которым агент следует в этой задаче. Нажмите, чтобы подключить";
+
+  const row = $("attached-skills");
+  row.innerHTML = "";
+  row.hidden = attached.length === 0;
+  attached.forEach((slug) => {
+    const skill = skillList.find((item) => item.slug === slug);
+    const status = ((skill && skill.compatibility) || {}).status || "ok";
+    const pill = element("span", "pill" + (status === "partial" ? " partial" : ""));
+    pill.append(element("span", null, "\u{1F9E9}"), element("span", null, (skill && skill.name) || slug));
+    pill.title = (skill && skill.description)
+      ? skill.name + " — " + skill.description
+      : "Навык «" + slug + "»: агент получит его вместе с задачей";
+    const remove = element("button", null, "\u00D7");
+    remove.type = "button";
+    remove.title = "Отключить этот навык от задачи";
+    remove.onclick = () => detachSkill(slug);
+    pill.appendChild(remove);
+    row.appendChild(pill);
+  });
+}
+
+async function detachSkill(slug) {
+  const attached = ((sessionInfo && sessionInfo.skills) || []).filter((item) => item !== slug);
+  try {
+    sessionInfo = await api("/api/sessions/" + currentId, {
+      method: "PATCH", body: JSON.stringify({ skills: attached }),
+    });
+  } catch (error) {
+    append(card("error", "Навык не отключился", error.message));
+    return;
+  }
+  renderSkillsButton();
+  renderSkillsMenu($("skills-menu"));
+  renderSkillsMenu($("skills-menu-composer"));
+}
+
+function renderSkillsMenu(menu) {
   menu.innerHTML = "";
   if (!skillList.length) {
     menu.appendChild(element("div", "note",
@@ -2319,6 +2385,9 @@ function renderSkillsMenu() {
       "Создать или импортировать: Настройки → Навыки."));
     return;
   }
+  menu.appendChild(element("div", "note",
+    "Отметьте методички, которым агент должен следовать в этой задаче. " +
+    "Новые навыки добавляются в Настройках → Навыки."));
   const attached = (sessionInfo && sessionInfo.skills) || [];
   skillList.forEach((skill) => {
     const label = document.createElement("label");
@@ -2332,6 +2401,7 @@ function renderSkillsMenu() {
         method: "PATCH", body: JSON.stringify({ skills: chosen }),
       });
       renderSkillsButton();
+      renderSkillsMenu(menu === $("skills-menu") ? $("skills-menu-composer") : $("skills-menu"));
     };
     check.dataset.slug = skill.slug;
     const text = element("span", null, skill.name);
@@ -2344,18 +2414,29 @@ function renderSkillsMenu() {
   });
 }
 
-$("skills-button").onclick = async () => {
+async function openSkillsMenu(menuId) {
   if (!currentId) {
     const info = await api("/api/sessions", { method: "POST" });
     await selectTask(info.id);
   }
   await refreshSkills();
-  renderSkillsMenu();
-  $("skills-menu").classList.toggle("open");
-};
+  const menu = $(menuId);
+  renderSkillsMenu(menu);
+  const wasOpen = menu.classList.contains("open");
+  closeSkillMenus();
+  menu.classList.toggle("open", !wasOpen);
+}
+
+function closeSkillMenus() {
+  $("skills-menu").classList.remove("open");
+  $("skills-menu-composer").classList.remove("open");
+}
+
+$("skills-button").onclick = () => openSkillsMenu("skills-menu");
+$("skills-chip").onclick = () => openSkillsMenu("skills-menu-composer");
 
 document.addEventListener("click", (event) => {
-  if (!event.target.closest(".picker")) $("skills-menu").classList.remove("open");
+  if (!event.target.closest(".picker")) closeSkillMenus();
 });
 
 $("skill-file").onchange = async (event) => {
