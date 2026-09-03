@@ -177,7 +177,14 @@ answered in the same composer, and messages sent mid-run are queued. Each task
 works in its own `workspace/task_<id>` folder, so runs do not mix files; the
 Files tab lists that folder and previews text and images in place. A Model tab
 shows the last exchange with the LLM, which is where to look when a local model
-starts ignoring its tools. Use `--host` / `--port`
+starts ignoring its tools.
+
+Everything the console user edits by hand is editable in the browser too:
+Settings writes `config/config.toml` (model and vision model, browser, search,
+sandbox, planner) and `config/mcp.json` (MCP servers), reloads them into the
+running process, lists the models the configured server offers, and can send a
+test request to check the connection. Tasks are saved under
+`workspace/.sessions`, so the history survives a restart. Use `--host` / `--port`
 (or the `OPENMANUS_HOST` / `OPENMANUS_PORT` environment variables) to change
 the bind address.
 

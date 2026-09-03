@@ -29,6 +29,7 @@
   button.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
   button.ghost { background: transparent; border-color: transparent; }
   button.ghost:hover { background: #efece5; }
+  input, select, textarea { font: inherit; color: inherit; }
 
   /* left rail */
   aside { width: 244px; flex: none; display: flex; flex-direction: column; background: var(--rail); border-right: 1px solid var(--line); }
@@ -43,8 +44,11 @@
   .task .state { width: 7px; height: 7px; border-radius: 50%; background: #c8c4ba; flex: none; }
   .task .state.running { background: var(--green); animation: pulse 1.2s infinite; }
   .task .state.error { background: var(--red); }
-  .meta { padding: 12px 14px; border-top: 1px solid var(--line); color: var(--muted); font-size: 11.5px; line-height: 1.6; }
+  .task .kill { display: none; border: 0; background: transparent; color: var(--muted); padding: 0 2px; }
+  .task:hover .kill { display: block; }
+  .meta { padding: 10px 14px 12px; border-top: 1px solid var(--line); color: var(--muted); font-size: 11.5px; line-height: 1.6; }
   .meta b { color: var(--ink); font-weight: 600; }
+  .meta button { width: 100%; margin-top: 9px; }
   @keyframes pulse { 50% { opacity: .25; } }
 
   /* centre column */
@@ -58,7 +62,7 @@
 
   #feed { flex: 1; overflow-y: auto; padding: 22px 26px 8px; }
   .stack { max-width: 760px; margin: 0 auto; display: flex; flex-direction: column; gap: 14px; }
-  .empty { margin-top: 22vh; text-align: center; color: var(--muted); line-height: 1.8; }
+  .empty { margin-top: 20vh; text-align: center; color: var(--muted); line-height: 1.8; }
   .empty h2 { color: var(--ink); font-size: 19px; margin: 0 0 6px; }
   .bubble { align-self: flex-end; max-width: 82%; background: var(--accent); color: #fff; padding: 9px 13px; border-radius: 13px 13px 3px 13px; white-space: pre-wrap; word-break: break-word; }
   .agent { display: flex; gap: 10px; }
@@ -91,37 +95,70 @@
   .card summary { cursor: pointer; color: var(--muted); font-size: 12.5px; }
   .card details pre.block { margin: 9px 0 0; max-height: 260px; overflow: auto; }
 
-  form { padding: 12px 26px 18px; }
+  form.composer-form { padding: 12px 26px 18px; }
   .composer { max-width: 760px; margin: 0 auto; display: flex; gap: 9px; align-items: flex-end; background: var(--panel); border: 1px solid var(--line); border-radius: 13px; padding: 8px 8px 8px 14px; }
-  textarea { flex: 1; resize: none; border: 0; outline: none; background: transparent; font: inherit; height: 24px; max-height: 180px; padding: 4px 0; line-height: 1.5; }
+  textarea#prompt { flex: 1; resize: none; border: 0; outline: none; background: transparent; height: 24px; max-height: 180px; padding: 4px 0; line-height: 1.5; }
   .hint { max-width: 760px; margin: 6px auto 0; color: var(--muted); font-size: 11.5px; }
 
   /* right panel */
   #computer { width: 46%; min-width: 360px; max-width: 680px; flex: none; display: flex; flex-direction: column; background: var(--panel); border-left: 1px solid var(--line); }
   #computer.hidden { display: none; }
+  #computer.drop { outline: 2px dashed var(--accent); outline-offset: -8px; }
   #computer > header { display: flex; align-items: center; gap: 9px; padding: 11px 14px; border-bottom: 1px solid var(--line); }
   #computer h3 { margin: 0; font-size: 13px; font-weight: 600; flex: 1; }
   .tabs { display: flex; gap: 4px; padding: 8px 10px; border-bottom: 1px solid var(--line); overflow-x: auto; }
   .tabs button { padding: 5px 10px; font-size: 12.5px; color: var(--muted); border-color: transparent; background: transparent; white-space: nowrap; }
   .tabs button.on { background: var(--accent-soft); color: var(--accent); font-weight: 600; }
   #view { flex: 1; overflow: auto; padding: 14px; }
-  #view .placeholder { color: var(--muted); text-align: center; margin-top: 30%; line-height: 1.7; }
+  #view .placeholder { color: var(--muted); text-align: center; margin-top: 26%; line-height: 1.7; }
   .viewhead { display: flex; align-items: center; gap: 8px; margin-bottom: 9px; font-size: 12.5px; color: var(--muted); }
   .viewhead .path { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; color: var(--ink); overflow: hidden; text-overflow: ellipsis; }
+  .viewhead a { color: var(--accent); font-size: 12px; margin-left: auto; }
+  .viewhead button { padding: 3px 8px; font-size: 12px; }
   pre.block { background: var(--code-bg); color: var(--code-ink); padding: 12px 14px; border-radius: 9px; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12.5px; line-height: 1.55; white-space: pre-wrap; word-break: break-word; margin: 0 0 12px; }
   pre.block.out { background: #f3f1ec; color: var(--ink); border: 1px solid var(--line); }
   pre.block .cmd { color: #7fd18c; }
   .shot { max-width: 100%; max-height: 68vh; border: 1px solid var(--line); border-radius: 9px; display: block; margin-bottom: 12px; }
-  .files a { display: flex; justify-content: space-between; gap: 10px; padding: 8px 9px; border-radius: 8px; color: var(--ink); text-decoration: none; font-size: 12.5px; }
+  .files a { display: flex; justify-content: space-between; gap: 10px; padding: 8px 9px; border-radius: 8px; color: var(--ink); text-decoration: none; font-size: 12.5px; cursor: pointer; }
   .files a:hover { background: #f2efe9; }
   .files small { color: var(--muted); flex: none; }
-  .viewhead a { color: var(--accent); font-size: 12px; margin-left: auto; }
-  .viewhead button { padding: 3px 8px; font-size: 12px; }
+  .toolcard { border: 1px solid var(--line); border-radius: 9px; padding: 9px 11px; margin-bottom: 8px; }
+  .toolcard b { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12.5px; }
+  .toolcard div { color: var(--muted); font-size: 12px; margin-top: 3px; line-height: 1.5; }
   #timeline { border-top: 1px solid var(--line); padding: 8px 10px; display: flex; gap: 6px; overflow-x: auto; align-items: center; min-height: 42px; }
   #timeline .step { flex: none; padding: 5px 9px; border: 1px solid var(--line); border-radius: 7px; font-size: 11.5px; cursor: pointer; color: var(--muted); background: var(--panel); white-space: nowrap; }
   #timeline .step.on { border-color: var(--accent); color: var(--accent); background: var(--accent-soft); }
   #timeline .step.failed { border-color: #f0c4c4; color: var(--red); }
   .live { display: flex; align-items: center; gap: 5px; font-size: 11.5px; color: var(--muted); flex: none; }
+
+  /* settings dialog */
+  #overlay { position: fixed; inset: 0; background: rgba(30, 28, 25, .38); display: none; align-items: center; justify-content: center; z-index: 20; }
+  #overlay.open { display: flex; }
+  #dialog { width: min(920px, 92vw); height: min(640px, 88vh); background: var(--panel); border-radius: 14px; display: flex; flex-direction: column; overflow: hidden; }
+  #dialog > header { display: flex; align-items: center; padding: 14px 18px; border-bottom: 1px solid var(--line); }
+  #dialog > header h3 { margin: 0; font-size: 15px; flex: 1; }
+  .dialog-body { flex: 1; display: flex; min-height: 0; }
+  .dialog-nav { width: 200px; flex: none; border-right: 1px solid var(--line); padding: 10px 8px; overflow-y: auto; }
+  .dialog-nav button { display: block; width: 100%; text-align: left; border: 0; background: transparent; padding: 8px 10px; border-radius: 8px; color: #4c4a45; }
+  .dialog-nav button.on { background: var(--accent-soft); color: var(--accent); font-weight: 600; }
+  .dialog-form { flex: 1; overflow-y: auto; padding: 16px 20px; }
+  .field { display: flex; align-items: flex-start; gap: 14px; margin-bottom: 13px; }
+  .field label { width: 210px; flex: none; padding-top: 6px; font-size: 13px; }
+  .field .control { flex: 1; min-width: 0; }
+  .field input[type=text], .field input[type=password], .field input[type=number], .field select {
+    width: 100%; padding: 6px 9px; border: 1px solid var(--line); border-radius: 8px; background: var(--panel); }
+  .field .note { color: var(--muted); font-size: 11.5px; margin-top: 4px; line-height: 1.5; }
+  .field.row-check { align-items: center; }
+  .field.row-check input { width: 16px; height: 16px; }
+  .section-title { font-size: 12px; text-transform: uppercase; letter-spacing: .7px; color: var(--muted); margin: 4px 0 12px; }
+  #dialog > footer { display: flex; align-items: center; gap: 10px; padding: 12px 18px; border-top: 1px solid var(--line); }
+  #dialog-status { flex: 1; font-size: 12.5px; color: var(--muted); }
+  #dialog-status.ok { color: var(--green); }
+  #dialog-status.bad { color: var(--red); }
+  .server-row { display: flex; gap: 8px; margin-bottom: 8px; align-items: center; }
+  .server-row input, .server-row select { padding: 6px 8px; border: 1px solid var(--line); border-radius: 8px; }
+  .server-row .id { width: 120px; }
+  .server-row .rest { flex: 1; }
 </style>
 </head>
 <body>
@@ -132,15 +169,19 @@
     <button id="new-task" class="primary" style="width:100%">Новая задача</button>
   </header>
   <div id="tasks"></div>
-  <div class="meta" id="model-meta"></div>
+  <div class="meta">
+    <div id="model-meta"></div>
+    <button id="open-settings">Настройки</button>
+  </div>
 </aside>
 
 <main>
   <header>
     <div id="title">Нет активной задачи</div>
     <div class="switch">
-      <button id="mode-agent" class="on">Агент</button>
-      <button id="mode-chat">Чат</button>
+      <button id="mode-agent" class="on" title="Агент сам выбирает инструменты">Агент</button>
+      <button id="mode-flow" title="Сначала план, потом выполнение по шагам">План</button>
+      <button id="mode-chat" title="Ответ модели без инструментов">Чат</button>
     </div>
     <span id="progress"></span>
     <button id="stop" disabled>Стоп</button>
@@ -157,26 +198,29 @@
     </div>
   </div>
 
-  <form id="composer-form">
+  <form id="composer-form" class="composer-form">
     <div class="composer">
       <textarea id="prompt" rows="1" placeholder="Что нужно сделать?"></textarea>
+      <button type="button" id="attach" title="Приложить файл к задаче">Файл</button>
       <button class="primary" type="submit">Отправить</button>
     </div>
     <div class="hint" id="hint">Enter — отправить, Shift+Enter — перенос строки</div>
   </form>
+  <input type="file" id="file-input" multiple hidden />
 </main>
 
 <section id="computer">
   <header>
     <h3>Компьютер агента</h3>
     <span class="live"><input type="checkbox" id="follow" checked /> следить</span>
-    <button class="ghost" id="refresh-files" title="Обновить файлы">&#8635;</button>
+    <button class="ghost" id="refresh-files" title="Обновить">&#8635;</button>
   </header>
   <div class="tabs">
     <button data-tab="terminal" class="on">Терминал</button>
     <button data-tab="editor">Редактор</button>
     <button data-tab="browser">Браузер</button>
     <button data-tab="files">Файлы</button>
+    <button data-tab="tools">Инструменты</button>
     <button data-tab="model">Модель</button>
     <button data-tab="logs">Логи</button>
   </div>
@@ -184,22 +228,40 @@
   <div id="timeline"></div>
 </section>
 
+<div id="overlay">
+  <div id="dialog">
+    <header>
+      <h3>Настройки OpenManus</h3>
+      <button class="ghost" id="close-settings">✕</button>
+    </header>
+    <div class="dialog-body">
+      <div class="dialog-nav" id="dialog-nav"></div>
+      <div class="dialog-form" id="dialog-form"></div>
+    </div>
+    <footer>
+      <span id="dialog-status">Меняется файл config/config.toml — терминал не нужен</span>
+      <button id="test-llm">Проверить связь</button>
+      <button class="primary" id="save-settings">Сохранить</button>
+    </footer>
+  </div>
+</div>
+
 <script>
 const $ = (id) => document.getElementById(id);
 const feed = $("feed"), stack = $("stack"), view = $("view"), timeline = $("timeline");
 
 let currentId = null, source = null, mode = "agent";
 let steps = [], activeStep = -1, tab = "terminal", logs = [], files = [];
-let exchanges = [], preview = null;
+let exchanges = [], preview = null, sessionInfo = null, appConfig = null;
+let settings = null, mcp = null, models = [], dialogSection = "llm";
 
 const ICONS = {
   python_execute: "\u{1F40D}", str_replace_editor: "\u{1F4DD}", ask_human: "\u{1F4AC}",
   terminate: "\u{1F3C1}", web_search: "\u{1F50E}", browser_exec: "\u{1F310}",
-  browser_screenshot: "\u{1F4F8}", bash: "\u{2328}",
+  browser_screenshot: "\u{1F4F8}", bash: "\u{2328}", planning: "\u{1F5C2}",
 };
 const icon = (name) => ICONS[name] || (name.startsWith("browser") ? "\u{1F310}" : "\u{1F527}");
 
-/* which panel tab a tool belongs to */
 function tabFor(step) {
   if (step.image || step.name.startsWith("browser")) return "browser";
   if (step.name === "str_replace_editor") return "editor";
@@ -224,7 +286,7 @@ function markdown(text) {
   const blocks = [];
   let html = escapeHtml(text).replace(/```(\w*)\n?([\s\S]*?)```/g, (match, lang, code) => {
     blocks.push("<pre><code>" + code.replace(/\n$/, "") + "</code></pre>");
-    return " " + (blocks.length - 1) + " ";
+    return "\n\n@@BLOCK" + (blocks.length - 1) + "@@\n\n";
   });
   html = html
     .replace(/`([^`\n]+)`/g, "<code>$1</code>")
@@ -240,10 +302,12 @@ function markdown(text) {
   html = html.split(/\n{2,}/).map((part) => {
     const trimmed = part.trim();
     if (!trimmed) return "";
-    if (/^(<h\d|<ul|<ol|<pre| )/.test(trimmed)) return trimmed;
+    const block = trimmed.match(/^@@BLOCK(\d+)@@$/);
+    if (block) return blocks[Number(block[1])];
+    if (/^<(h\d|ul|ol|pre)/.test(trimmed)) return trimmed;
     return "<p>" + trimmed.replace(/\n/g, "<br />") + "</p>";
   }).join("");
-  return html.replace(/ (\d+) /g, (match, index) => blocks[Number(index)]);
+  return html.replace(/@@BLOCK(\d+)@@/g, (match, index) => blocks[Number(index)]);
 }
 
 /* -------------------------------------------------------------- chat */
@@ -321,11 +385,10 @@ function imageSrc(data) {
 function renderView() {
   view.innerHTML = "";
   if (tab === "files") return renderFiles();
+  if (tab === "tools") return renderTools();
   if (tab === "model") return renderModel();
-  if (tab === "logs") {
-    view.appendChild(element("pre", "block out", logs.slice(-400).join("\n") || "Пока пусто"));
-    return;
-  }
+  if (tab === "logs") return renderLogs();
+
   const step = steps[activeStep];
   if (!step) {
     view.innerHTML = '<div class="placeholder">Здесь появится то,<br />что делает агент</div>';
@@ -383,6 +446,7 @@ function renderTimeline() {
   if (active) active.scrollIntoView({ inline: "nearest", block: "nearest" });
 }
 
+/* ------------------------------------------------------------- files */
 function fileUrl(endpoint, path) {
   return "/api/workspace/" + endpoint + "?path=" + encodeURIComponent(path) +
     (currentId ? "&session=" + currentId : "");
@@ -390,12 +454,20 @@ function fileUrl(endpoint, path) {
 
 function renderFiles() {
   if (preview) return renderPreview();
+  const head = element("div", "viewhead");
+  head.appendChild(element("span", null, "Папка задачи"));
+  const upload = element("button", null, "Загрузить файл");
+  upload.onclick = () => $("file-input").click();
+  head.appendChild(upload);
+  view.appendChild(head);
+
   const box = element("div", "files");
-  if (!files.length) box.appendChild(element("div", "placeholder", "Файлов пока нет"));
+  if (!files.length) {
+    box.appendChild(element("div", "placeholder", "Файлов пока нет. Можно перетащить их сюда мышью."));
+  }
   files.forEach((file) => {
     const row = document.createElement("a");
-    row.href = "#";
-    row.onclick = (event) => { event.preventDefault(); openPreview(file.path); };
+    row.onclick = () => openPreview(file.path);
     row.appendChild(element("span", null, file.path));
     row.appendChild(element("small", null, (file.size / 1024).toFixed(1) + " КБ"));
     box.appendChild(row);
@@ -405,7 +477,7 @@ function renderFiles() {
 
 async function openPreview(path) {
   try {
-    preview = { path: path, ...(await api(fileUrl("preview", path))) };
+    preview = Object.assign({ path: path }, await api(fileUrl("preview", path)));
   } catch (error) {
     preview = { path: path, kind: "error", content: error.message };
   }
@@ -440,6 +512,50 @@ function renderPreview() {
   }
 }
 
+async function loadFiles() {
+  if (!currentId) return;
+  const data = await api("/api/workspace?session=" + currentId);
+  files = data.files;
+  if (tab === "files" && !preview) renderView();
+}
+
+async function uploadFiles(fileList) {
+  if (!currentId) {
+    const info = await api("/api/sessions", { method: "POST" });
+    await selectTask(info.id);
+  }
+  for (const file of fileList) {
+    try {
+      await fetch("/api/sessions/" + currentId + "/files?name=" + encodeURIComponent(file.name),
+        { method: "PUT", body: file });
+    } catch (error) {
+      append(card("error", "Не удалось загрузить", file.name + ": " + error.message));
+    }
+  }
+  await loadFiles();
+  setTab("files");
+}
+
+/* ------------------------------------------------------------- tools */
+function renderTools() {
+  const tools = (sessionInfo && sessionInfo.tools) || [];
+  if (!tools.length) {
+    view.innerHTML = '<div class="placeholder">Список появится после первого запуска задачи:<br />' +
+      'инструменты подключаются вместе с агентом</div>';
+    return;
+  }
+  view.appendChild(element("div", "viewhead", "Доступно инструментов: " + tools.length));
+  tools.forEach((tool) => {
+    const box = element("div", "toolcard");
+    box.appendChild(element("b", null, tool.name));
+    box.appendChild(element("div", null, tool.description || ""));
+    view.appendChild(box);
+  });
+  if (appConfig && appConfig.mcp_servers && appConfig.mcp_servers.length) {
+    view.appendChild(element("div", "viewhead", "MCP-серверы: " + appConfig.mcp_servers.join(", ")));
+  }
+}
+
 function renderModel() {
   if (!exchanges.length) {
     view.innerHTML = '<div class="placeholder">Здесь будет видно,<br />что уходит в модель и что она отвечает</div>';
@@ -448,17 +564,50 @@ function renderModel() {
   const last = exchanges[exchanges.length - 1];
   view.appendChild(element("div", "viewhead", "Последний обмен с моделью, всего обменов: " + exchanges.length));
   last.forEach((message) => {
-    const label = element("div", "viewhead", message.role + (message.tools ? " → " + message.tools.join(", ") : ""));
-    view.appendChild(label);
+    view.appendChild(element("div", "viewhead", message.role + (message.tools ? " → " + message.tools.join(", ") : "")));
     view.appendChild(element("pre", message.role === "assistant" ? "block" : "block out",
       message.content || "(пусто)"));
   });
 }
 
-async function loadFiles() {
-  const data = await api("/api/workspace" + (currentId ? "?session=" + currentId : ""));
-  files = data.files;
-  if (tab === "files" && !preview) renderView();
+function renderLogs() {
+  const head = element("div", "viewhead");
+  head.appendChild(element("span", null, "Живой журнал"));
+  const openFile = element("button", null, "Файлы логов");
+  openFile.onclick = showLogFiles;
+  head.appendChild(openFile);
+  view.appendChild(head);
+  view.appendChild(element("pre", "block out", logs.slice(-400).join("\n") || "Пока пусто"));
+}
+
+async function showLogFiles() {
+  const data = await api("/api/logs");
+  view.innerHTML = "";
+  const head = element("div", "viewhead");
+  const back = element("button", "ghost", "← к журналу");
+  back.onclick = () => renderView();
+  head.appendChild(back);
+  head.appendChild(element("span", null, "Файлы логов"));
+  view.appendChild(head);
+  const box = element("div", "files");
+  data.files.forEach((file) => {
+    const row = document.createElement("a");
+    row.onclick = async () => {
+      const log = await api("/api/logs/" + encodeURIComponent(file.name));
+      view.innerHTML = "";
+      const backHead = element("div", "viewhead");
+      const backButton = element("button", "ghost", "← к списку");
+      backButton.onclick = showLogFiles;
+      backHead.appendChild(backButton);
+      backHead.appendChild(element("span", "path", file.name));
+      view.appendChild(backHead);
+      view.appendChild(element("pre", "block out", log.content));
+    };
+    row.appendChild(element("span", null, file.name));
+    row.appendChild(element("small", null, (file.size / 1024).toFixed(0) + " КБ"));
+    box.appendChild(row);
+  });
+  view.appendChild(box);
 }
 
 /* ------------------------------------------------------------ events */
@@ -472,6 +621,9 @@ function render(event) {
     case "user":
     case "answer":
       append(element("div", "bubble", event.message));
+      break;
+    case "upload":
+      append(card("", "Файл в папке задачи", event.message));
       break;
     case "queued":
       append(card("", "В очереди", event.message + "\n\nБудет отправлено, когда агент закончит текущую задачу."));
@@ -526,6 +678,7 @@ function render(event) {
       done.appendChild(details);
       append(done);
       loadFiles();
+      refreshSession();
       break;
     }
     case "error":
@@ -557,12 +710,18 @@ function connect(sessionId) {
   source.onmessage = (message) => render(JSON.parse(message.data));
 }
 
+async function refreshSession() {
+  if (!currentId) return;
+  sessionInfo = await api("/api/sessions/" + currentId);
+  if (tab === "tools") renderView();
+}
+
 async function selectTask(sessionId) {
   currentId = sessionId;
   localStorage.setItem("openmanus.session", sessionId);
-  const info = await api("/api/sessions/" + sessionId);
-  $("title").textContent = info.title;
-  setState(info.state);
+  sessionInfo = await api("/api/sessions/" + sessionId);
+  $("title").textContent = sessionInfo.title;
+  setState(sessionInfo.state);
   connect(sessionId);
   await loadTasks();
   await loadFiles();
@@ -575,11 +734,337 @@ async function loadTasks() {
   sessions.forEach((info) => {
     const row = element("div", "task" + (info.id === currentId ? " active" : ""));
     row.appendChild(element("span", "state " + (info.state === "idle" ? "" : info.state)));
-    row.appendChild(element("span", "label", info.title));
-    row.title = info.title;
-    row.onclick = () => selectTask(info.id);
+    const label = element("span", "label", info.title);
+    label.onclick = () => selectTask(info.id);
+    row.appendChild(label);
+    const kill = element("button", "kill", "✕");
+    kill.title = "Удалить задачу";
+    kill.onclick = async (event) => {
+      event.stopPropagation();
+      if (!confirm("Удалить задачу «" + info.title + "»? Файлы в её папке останутся.")) return;
+      await api("/api/sessions/" + info.id, { method: "DELETE" });
+      if (info.id === currentId) { currentId = null; stack.innerHTML = ""; $("title").textContent = "Нет активной задачи"; }
+      await loadTasks();
+    };
+    row.appendChild(kill);
+    row.onclick = (event) => { if (event.target === row) selectTask(info.id); };
     list.appendChild(row);
   });
+}
+
+/* ---------------------------------------------------------- settings */
+const SECTIONS = [
+  { id: "llm", label: "Модель" },
+  { id: "vision", label: "Модель зрения" },
+  { id: "browser", label: "Браузер" },
+  { id: "search", label: "Поиск" },
+  { id: "sandbox", label: "Песочница" },
+  { id: "runflow", label: "Планировщик" },
+  { id: "mcp", label: "MCP-серверы" },
+  { id: "task", label: "Текущая задача" },
+];
+
+const FIELDS = {
+  llm: [
+    { key: "model", label: "Модель", type: "model", note: "Список подтягивается с сервера моделей, можно вписать своё имя" },
+    { key: "base_url", label: "Адрес API", type: "text", note: "Для Ollama в Docker: http://host.docker.internal:11434/v1" },
+    { key: "api_key", label: "Ключ API", type: "password", note: "Для Ollama подойдёт любое слово" },
+    { key: "api_type", label: "Тип API", type: "select", options: ["", "ollama", "azure", "aws", "jiekou"] },
+    { key: "api_version", label: "Версия API", type: "text", note: "Только для Azure" },
+    { key: "max_tokens", label: "Токенов в ответе", type: "number" },
+    { key: "max_input_tokens", label: "Лимит входных токенов", type: "number", note: "Суммарно на весь запуск; пусто — без лимита" },
+    { key: "temperature", label: "Температура", type: "number", step: "0.1" },
+  ],
+  vision: [
+    { key: "model", label: "Модель", type: "text", note: "Нужна для скриншотов браузера; оставьте пустым, если такой модели нет" },
+    { key: "base_url", label: "Адрес API", type: "text" },
+    { key: "api_key", label: "Ключ API", type: "password" },
+    { key: "max_tokens", label: "Токенов в ответе", type: "number" },
+    { key: "temperature", label: "Температура", type: "number", step: "0.1" },
+  ],
+  browser: [
+    { key: "headless", label: "Без окна браузера", type: "bool" },
+    { key: "disable_security", label: "Отключить защиту браузера", type: "bool" },
+    { key: "max_content_length", label: "Макс. длина текста со страницы", type: "number" },
+    { key: "chrome_instance_path", label: "Путь к Chrome", type: "text" },
+    { key: "cdp_url", label: "CDP-адрес", type: "text" },
+    { key: "wss_url", label: "WebSocket-адрес", type: "text" },
+    { key: "extra_chromium_args", label: "Доп. аргументы", type: "list", note: "Через запятую" },
+  ],
+  search: [
+    { key: "engine", label: "Поисковик", type: "select", options: ["Google", "DuckDuckGo", "Baidu", "Bing"] },
+    { key: "fallback_engines", label: "Запасные", type: "list", note: "Через запятую" },
+    { key: "lang", label: "Язык", type: "text" },
+    { key: "country", label: "Страна", type: "text" },
+    { key: "retry_delay", label: "Пауза перед повтором, с", type: "number" },
+    { key: "max_retries", label: "Число повторов", type: "number" },
+  ],
+  sandbox: [
+    { key: "use_sandbox", label: "Запускать код в контейнере", type: "bool", note: "Требует доступ к Docker изнутри контейнера" },
+    { key: "image", label: "Образ", type: "text" },
+    { key: "work_dir", label: "Рабочая папка", type: "text" },
+    { key: "memory_limit", label: "Лимит памяти", type: "text" },
+    { key: "cpu_limit", label: "Лимит CPU", type: "number", step: "0.5" },
+    { key: "timeout", label: "Таймаут команды, с", type: "number" },
+    { key: "network_enabled", label: "Доступ в сеть", type: "bool" },
+  ],
+  runflow: [
+    { key: "use_data_analysis_agent", label: "Агент анализа данных", type: "bool", note: "Подключается в режиме «План»: графики и отчёты" },
+  ],
+};
+
+function fieldValue(section, key) {
+  if (section === "vision") return ((settings.sections.llm || {}).vision || {})[key];
+  if (section === "task") return sessionInfo ? sessionInfo[key] : undefined;
+  return (settings.sections[section] || {})[key];
+}
+
+function buildField(section, spec) {
+  const wrap = element("div", "field" + (spec.type === "bool" ? " row-check" : ""));
+  wrap.appendChild(element("label", null, spec.label));
+  const control = element("div", "control");
+  let input;
+  const value = fieldValue(section, spec.key);
+
+  if (spec.type === "bool") {
+    input = document.createElement("input");
+    input.type = "checkbox";
+    input.checked = Boolean(value);
+  } else if (spec.type === "select") {
+    input = document.createElement("select");
+    (spec.options || []).forEach((option) => {
+      const node = document.createElement("option");
+      node.value = option;
+      node.textContent = option || "(по умолчанию)";
+      input.appendChild(node);
+    });
+    input.value = value || "";
+  } else if (spec.type === "model") {
+    input = document.createElement("select");
+    const known = models.slice();
+    if (value && !known.includes(value)) known.unshift(value);
+    known.forEach((name) => {
+      const node = document.createElement("option");
+      node.value = name;
+      node.textContent = name;
+      input.appendChild(node);
+    });
+    const custom = document.createElement("option");
+    custom.value = "__custom__";
+    custom.textContent = "другая модель…";
+    input.appendChild(custom);
+    input.value = value || (known[0] || "__custom__");
+    input.onchange = () => {
+      if (input.value === "__custom__") {
+        const typed = prompt("Имя модели", value || "");
+        if (typed) {
+          const node = document.createElement("option");
+          node.value = typed;
+          node.textContent = typed;
+          input.insertBefore(node, input.firstChild);
+          input.value = typed;
+        } else {
+          input.value = value || "";
+        }
+      }
+    };
+  } else if (spec.type === "list") {
+    input = document.createElement("input");
+    input.type = "text";
+    input.value = Array.isArray(value) ? value.join(", ") : (value || "");
+  } else {
+    input = document.createElement("input");
+    input.type = spec.type === "password" ? "password" : spec.type === "number" ? "number" : "text";
+    if (spec.step) input.step = spec.step;
+    input.value = value === undefined || value === null ? "" : value;
+  }
+
+  input.dataset.section = section;
+  input.dataset.key = spec.key;
+  input.dataset.kind = spec.type;
+  control.appendChild(input);
+  if (spec.note) control.appendChild(element("div", "note", spec.note));
+  wrap.appendChild(control);
+  return wrap;
+}
+
+function renderDialog() {
+  const nav = $("dialog-nav");
+  nav.innerHTML = "";
+  SECTIONS.forEach((section) => {
+    const button = element("button", section.id === dialogSection ? "on" : null, section.label);
+    button.onclick = () => { dialogSection = section.id; renderDialog(); };
+    nav.appendChild(button);
+  });
+
+  const form = $("dialog-form");
+  form.innerHTML = "";
+  if (dialogSection === "mcp") return renderMcpSection(form);
+  if (dialogSection === "task") return renderTaskSection(form);
+
+  form.appendChild(element("div", "section-title",
+    SECTIONS.find((s) => s.id === dialogSection).label));
+  (FIELDS[dialogSection] || []).forEach((spec) => form.appendChild(buildField(dialogSection, spec)));
+}
+
+function renderTaskSection(form) {
+  form.appendChild(element("div", "section-title", "Текущая задача"));
+  if (!sessionInfo) {
+    form.appendChild(element("div", "note", "Сначала создайте задачу"));
+    return;
+  }
+  form.appendChild(buildField("task", {
+    key: "max_steps", label: "Максимум шагов", type: "number",
+    note: "Сколько шагов агент делает, прежде чем остановиться. По умолчанию 20",
+  }));
+  const info = element("div", "field");
+  info.appendChild(element("label", null, "Папка задачи"));
+  const control = element("div", "control");
+  control.appendChild(element("div", "note", sessionInfo.workspace));
+  info.appendChild(control);
+  form.appendChild(info);
+}
+
+function renderMcpSection(form) {
+  form.appendChild(element("div", "section-title", "MCP-серверы"));
+  form.appendChild(element("div", "note",
+    "Внешние наборы инструментов. Подключаются при следующем запуске задачи. " +
+    "Браузер (browser-use) подключается сам и здесь не указывается."));
+
+  const box = element("div", "mcp-list");
+  const servers = (mcp && mcp.servers) || {};
+  Object.entries(servers).forEach(([id, server]) => box.appendChild(mcpRow(id, server)));
+  form.appendChild(box);
+
+  const add = element("button", null, "Добавить сервер");
+  add.style.marginTop = "10px";
+  add.onclick = () => box.appendChild(mcpRow("", { type: "sse", url: "" }));
+  form.appendChild(add);
+}
+
+function mcpRow(id, server) {
+  const row = element("div", "server-row");
+  const idInput = document.createElement("input");
+  idInput.className = "id";
+  idInput.placeholder = "имя";
+  idInput.value = id;
+  const type = document.createElement("select");
+  ["sse", "stdio"].forEach((option) => {
+    const node = document.createElement("option");
+    node.value = option;
+    node.textContent = option;
+    type.appendChild(node);
+  });
+  type.value = server.type || "sse";
+  const rest = document.createElement("input");
+  rest.className = "rest";
+  rest.placeholder = type.value === "sse" ? "http://адрес/sse" : "команда arg1 arg2";
+  rest.value = server.type === "stdio"
+    ? [server.command].concat(server.args || []).join(" ")
+    : (server.url || "");
+  type.onchange = () => { rest.placeholder = type.value === "sse" ? "http://адрес/sse" : "команда arg1 arg2"; };
+  const kill = element("button", "ghost", "✕");
+  kill.onclick = () => row.remove();
+  row.append(idInput, type, rest, kill);
+  return row;
+}
+
+function collectSettings() {
+  const sections = JSON.parse(JSON.stringify(settings.sections || {}));
+  sections.llm = sections.llm || {};
+  document.querySelectorAll("#dialog-form [data-key]").forEach((input) => {
+    const section = input.dataset.section, key = input.dataset.key, kind = input.dataset.kind;
+    let value;
+    if (kind === "bool") value = input.checked;
+    else if (kind === "number") value = input.value === "" ? null : Number(input.value);
+    else if (kind === "list") value = input.value.split(",").map((s) => s.trim()).filter(Boolean);
+    else value = input.value;
+
+    if (section === "task") return;  // applied separately
+    const target = section === "vision"
+      ? (sections.llm.vision = sections.llm.vision || {})
+      : (sections[section] = sections[section] || {});
+    if (value === null || value === "" || (Array.isArray(value) && !value.length)) delete target[key];
+    else target[key] = value;
+  });
+  if (sections.llm.vision && !sections.llm.vision.model) delete sections.llm.vision;
+  return sections;
+}
+
+function collectMcp() {
+  const servers = {};
+  document.querySelectorAll("#dialog-form .server-row").forEach((row) => {
+    const [idInput, type, rest] = row.children;
+    const id = idInput.value.trim();
+    if (!id) return;
+    if (type.value === "sse") {
+      servers[id] = { type: "sse", url: rest.value.trim() };
+    } else {
+      const parts = rest.value.trim().split(/\s+/);
+      servers[id] = { type: "stdio", command: parts[0] || "", args: parts.slice(1) };
+    }
+  });
+  return servers;
+}
+
+function dialogStatus(text, kind) {
+  const node = $("dialog-status");
+  node.textContent = text;
+  node.className = kind || "";
+}
+
+async function openSettings() {
+  settings = await api("/api/settings");
+  mcp = await api("/api/mcp");
+  try {
+    models = (await api("/api/settings/models")).models;
+  } catch (error) {
+    models = [];
+  }
+  renderDialog();
+  dialogStatus("Файл: " + settings.path);
+  $("overlay").classList.add("open");
+}
+
+async function saveSettings() {
+  try {
+    if (dialogSection === "mcp") {
+      const servers = collectMcp();
+      const result = await api("/api/mcp", { method: "POST", body: JSON.stringify({ servers: servers }) });
+      mcp = { servers: servers, connected: result.connected };
+      dialogStatus("MCP-серверы сохранены", "ok");
+    } else if (dialogSection === "task") {
+      const input = document.querySelector('#dialog-form [data-key="max_steps"]');
+      sessionInfo = await api("/api/sessions/" + currentId, {
+        method: "PATCH", body: JSON.stringify({ max_steps: Number(input.value) }),
+      });
+      dialogStatus("Настройки задачи применены", "ok");
+    } else {
+      const sections = collectSettings();
+      const result = await api("/api/settings", { method: "POST", body: JSON.stringify({ sections: sections }) });
+      settings.sections = sections;
+      appConfig = await api("/api/config");
+      renderModelMeta();
+      dialogStatus("Сохранено. Новые настройки вступят в силу со следующего запуска задачи", "ok");
+    }
+  } catch (error) {
+    dialogStatus("Не сохранено: " + error.message, "bad");
+  }
+}
+
+async function testConnection() {
+  dialogStatus("Проверяю…");
+  try {
+    const result = await api("/api/settings/test", { method: "POST" });
+    dialogStatus(result.ok ? "Модель ответила: " + result.detail : result.detail, result.ok ? "ok" : "bad");
+  } catch (error) {
+    dialogStatus("Ошибка проверки: " + error.message, "bad");
+  }
+}
+
+function renderModelMeta() {
+  const llm = (appConfig && appConfig.llm) || {};
+  $("model-meta").innerHTML = "<b>" + (llm.model || "?") + "</b><br />" + (llm.base_url || "");
 }
 
 /* --------------------------------------------------------- interface */
@@ -589,21 +1074,34 @@ $("new-task").onclick = async () => {
 };
 $("stop").onclick = () => api("/api/sessions/" + currentId + "/stop", { method: "POST" });
 $("toggle-computer").onclick = () => $("computer").classList.toggle("hidden");
-$("refresh-files").onclick = loadFiles;
+$("refresh-files").onclick = () => { preview = null; loadFiles(); refreshSession(); };
 $("follow").onchange = (event) => { if (event.target.checked) select(steps.length - 1); };
+$("open-settings").onclick = openSettings;
+$("close-settings").onclick = () => $("overlay").classList.remove("open");
+$("save-settings").onclick = saveSettings;
+$("test-llm").onclick = testConnection;
+$("overlay").onclick = (event) => { if (event.target === $("overlay")) $("overlay").classList.remove("open"); };
+$("attach").onclick = () => $("file-input").click();
+$("file-input").onchange = (event) => { uploadFiles(event.target.files); event.target.value = ""; };
 document.querySelectorAll(".tabs button").forEach((button) => {
-  button.onclick = () => setTab(button.dataset.tab);
+  button.onclick = () => { preview = null; setTab(button.dataset.tab); };
 });
-$("mode-agent").onclick = () => setMode("agent");
-$("mode-chat").onclick = () => setMode("chat");
+["mode-agent", "mode-flow", "mode-chat"].forEach((id) => {
+  $(id).onclick = () => setMode(id.replace("mode-", ""));
+});
+
+const HINTS = {
+  agent: "Enter — отправить, Shift+Enter — перенос строки",
+  flow: "Режим плана: агент сначала составит план, затем пойдёт по шагам",
+  chat: "Режим чата: модель отвечает сразу, без инструментов и файлов",
+};
 
 function setMode(value) {
   mode = value;
-  $("mode-agent").classList.toggle("on", value === "agent");
-  $("mode-chat").classList.toggle("on", value === "chat");
-  $("hint").textContent = value === "agent"
-    ? "Enter — отправить, Shift+Enter — перенос строки"
-    : "Режим чата: модель отвечает сразу, без инструментов и файлов";
+  ["agent", "flow", "chat"].forEach((name) => {
+    $("mode-" + name).classList.toggle("on", name === value);
+  });
+  $("hint").textContent = HINTS[value];
 }
 
 $("composer-form").onsubmit = async (event) => {
@@ -640,16 +1138,28 @@ $("prompt").addEventListener("input", (event) => {
   event.target.style.height = Math.min(event.target.scrollHeight, 180) + "px";
 });
 
+/* drag and drop files onto the panel */
+const computer = $("computer");
+["dragenter", "dragover"].forEach((name) => computer.addEventListener(name, (event) => {
+  event.preventDefault();
+  computer.classList.add("drop");
+}));
+["dragleave", "drop"].forEach((name) => computer.addEventListener(name, (event) => {
+  event.preventDefault();
+  computer.classList.remove("drop");
+}));
+computer.addEventListener("drop", (event) => {
+  if (event.dataTransfer && event.dataTransfer.files.length) uploadFiles(event.dataTransfer.files);
+});
+
 (async function start() {
-  const config = await api("/api/config");
-  $("model-meta").innerHTML = "<b>" + (config.llm.model || "?") + "</b><br />" +
-    (config.llm.base_url || "") + "<br />" + config.workspace;
+  appConfig = await api("/api/config");
+  renderModelMeta();
   const { sessions } = await api("/api/sessions");
   const saved = localStorage.getItem("openmanus.session");
   const existing = sessions.find((info) => info.id === saved) || sessions[0];
   if (existing) await selectTask(existing.id);
   else await loadTasks();
-  await loadFiles();
 })();
 </script>
 </body>

@@ -1,10 +1,12 @@
 """Session objects backing the OpenManus web interface.
 
-A session owns one long-lived agent, the event log its runs produce and the
-fan-out queues feeding the browser's event stream.
+A session owns one long-lived agent, its own folder inside the workspace, the
+event log its runs produce and the fan-out queues feeding the browser. Sessions
+are written to disk so the interface survives a restart of the container.
 """
 
 import asyncio
+import json
 import threading
 import time
 from collections import deque
@@ -12,11 +14,12 @@ from pathlib import Path
 from typing import Any, AsyncIterator, Dict, List, Optional, Set
 
 from app.config import config
+from app.flow.flow_factory import FlowFactory, FlowType
 from app.logger import logger
 from app.prompt.manus import SYSTEM_PROMPT
 from app.schema import Message
 from app.tool.base import BaseTool
-from app.web.agent import WebManus
+from app.web.agent import WebManus, create_data_analysis_agent
 
 
 # how many events are replayed to a browser that (re)connects
@@ -25,6 +28,13 @@ MAX_HISTORY = 2000
 MAX_IMAGES_KEPT = 15
 # how long the agent waits for a human answer before giving up
 ANSWER_TIMEOUT = 900
+# a planning flow may run for a while, but not forever
+FLOW_TIMEOUT = 3600
+# conversation turns carried over when a stored session is reopened
+MEMORY_KEPT = 40
+
+WORKSPACE = Path(config.workspace_root)
+STORE = WORKSPACE / ".sessions"
 
 
 class WebAskHuman(BaseTool):
@@ -51,10 +61,17 @@ class WebAskHuman(BaseTool):
 class Session:
     """One conversation with a Manus agent."""
 
-    def __init__(self, session_id: str, title: str = "Новая задача"):
+    def __init__(
+        self,
+        session_id: str,
+        title: str = "Новая задача",
+        created_at: Optional[float] = None,
+        max_steps: int = 20,
+    ):
         self.id = session_id
         self.title = title
-        self.created_at = time.time()
+        self.created_at = created_at or time.time()
+        self.max_steps = max_steps
         self.agent: Optional[WebManus] = None
         self.task: Optional[asyncio.Task] = None
         self.state = "idle"
@@ -69,10 +86,102 @@ class Session:
         self._agent_lock = asyncio.Lock()
         self._loop = asyncio.get_event_loop()
         self._thread_id = threading.get_ident()
+        self._carried_memory: List[Dict[str, str]] = []
 
         # each task gets its own folder so files from different runs do not mix
-        self.workspace = Path(config.workspace_root) / f"task_{session_id}"
+        self.workspace = WORKSPACE / f"task_{session_id}"
         self.workspace.mkdir(parents=True, exist_ok=True)
+        self.store = STORE / session_id
+        self.store.mkdir(parents=True, exist_ok=True)
+        self._save_meta()
+
+    # ------------------------------------------------------------- persistence
+
+    def _save_meta(self) -> None:
+        try:
+            (self.store / "meta.json").write_text(
+                json.dumps(
+                    {
+                        "id": self.id,
+                        "title": self.title,
+                        "created_at": self.created_at,
+                        "max_steps": self.max_steps,
+                    },
+                    ensure_ascii=False,
+                ),
+                encoding="utf-8",
+            )
+        except OSError as exc:
+            logger.warning(f"Could not save session {self.id}: {exc}")
+
+    def _append_event(self, event: Dict[str, Any]) -> None:
+        """Store the event without its screenshot, which would bloat the file."""
+        record = {k: v for k, v in event.items() if k != "image"}
+        if event.get("image"):
+            record["image_dropped"] = True
+        try:
+            with (self.store / "events.jsonl").open("a", encoding="utf-8") as handle:
+                handle.write(json.dumps(record, ensure_ascii=False) + "\n")
+        except OSError:
+            pass
+
+    def _save_memory(self) -> None:
+        if self.agent is None:
+            return
+        kept = [
+            {"role": message.role, "content": message.content}
+            for message in self.agent.memory.messages
+            if message.role in {"user", "assistant"} and message.content
+        ]
+        try:
+            (self.store / "memory.json").write_text(
+                json.dumps(kept[-MEMORY_KEPT:], ensure_ascii=False), encoding="utf-8"
+            )
+        except OSError:
+            pass
+
+    @classmethod
+    def restore_all(cls) -> Dict[str, "Session"]:
+        """Rebuild sessions saved by an earlier run of the server."""
+        sessions: Dict[str, Session] = {}
+        if not STORE.exists():
+            return sessions
+        for folder in sorted(STORE.iterdir(), key=lambda p: p.name):
+            meta_file = folder / "meta.json"
+            if not meta_file.is_file():
+                continue
+            try:
+                meta = json.loads(meta_file.read_text(encoding="utf-8"))
+                session = cls(
+                    meta["id"],
+                    title=meta.get("title", "Задача"),
+                    created_at=meta.get("created_at"),
+                    max_steps=meta.get("max_steps", 20),
+                )
+                session._load_events(folder / "events.jsonl")
+                memory_file = folder / "memory.json"
+                if memory_file.is_file():
+                    session._carried_memory = json.loads(
+                        memory_file.read_text(encoding="utf-8")
+                    )
+                sessions[session.id] = session
+            except (json.JSONDecodeError, KeyError, OSError) as exc:
+                logger.warning(f"Skipping unreadable session in {folder}: {exc}")
+        if sessions:
+            logger.info(f"Restored {len(sessions)} saved session(s)")
+        return sessions
+
+    def _load_events(self, path: Path) -> None:
+        if not path.is_file():
+            return
+        events = []
+        for line in path.read_text(encoding="utf-8", errors="replace").splitlines():
+            try:
+                events.append(json.loads(line))
+            except json.JSONDecodeError:
+                continue
+        self.history = events[-MAX_HISTORY:]
+        self._event_id = self.history[-1]["id"] if self.history else 0
 
     # ------------------------------------------------------------------ events
 
@@ -91,6 +200,7 @@ class Session:
         self._event_id += 1
         event["id"] = self._event_id
         self.history.append(event)
+        self._append_event(event)
         if event.get("image"):
             self._image_events.append(event)
             while len(self._image_events) > MAX_IMAGES_KEPT:
@@ -136,7 +246,9 @@ class Session:
                 # point the agent at this task's folder, not the shared workspace
                 agent.system_prompt = SYSTEM_PROMPT.format(directory=self.workspace)
                 self._attach_web_tools(agent)
+                self._carry_memory(agent)
                 self.agent = agent
+            self.agent.max_steps = self.max_steps
             return self.agent
 
     def _attach_web_tools(self, agent: WebManus) -> None:
@@ -149,13 +261,40 @@ class Session:
         agent.available_tools.tools = tools
         agent.available_tools.tool_map = {tool.name: tool for tool in tools}
 
+    def _carry_memory(self, agent: WebManus) -> None:
+        """Give a reopened session the gist of what was said before."""
+        for message in self._carried_memory:
+            if message["role"] == "user":
+                agent.memory.add_message(Message.user_message(message["content"]))
+            else:
+                agent.memory.add_message(Message.assistant_message(message["content"]))
+        self._carried_memory = []
+
     def tools(self) -> List[Dict[str, str]]:
         if self.agent is None:
             return []
         return [
-            {"name": tool.name, "description": (tool.description or "").strip()}
+            {
+                "name": tool.name,
+                "description": (tool.description or "").strip()[:400],
+            }
             for tool in self.agent.available_tools.tools
         ]
+
+    async def reset_agent(self) -> None:
+        """Drop the agent so the next run picks up new settings."""
+        if self.agent is not None:
+            self._save_memory()
+            memory_file = self.store / "memory.json"
+            if memory_file.is_file():
+                self._carried_memory = json.loads(
+                    memory_file.read_text(encoding="utf-8")
+                )
+            try:
+                await self.agent.cleanup()
+            except Exception as exc:
+                logger.warning(f"Failed to clean up agent for {self.id}: {exc}")
+            self.agent = None
 
     async def ask_human(self, inquire: str) -> str:
         """Called by :class:`WebAskHuman` from inside a running agent."""
@@ -201,6 +340,7 @@ class Session:
     def start(self, prompt: str, mode: str = "agent") -> None:
         if self.title == "Новая задача":
             self.title = prompt[:60]
+            self._save_meta()
         self.task = asyncio.create_task(self._run(prompt, mode))
 
     async def _run(self, prompt: str, mode: str) -> None:
@@ -211,6 +351,8 @@ class Session:
             with logger.contextualize(web_session=self.id):
                 if mode == "chat":
                     await self._chat(prompt)
+                elif mode == "flow":
+                    await self._flow(prompt)
                 else:
                     agent = await self.ensure_agent()
                     agent.current_step = 0
@@ -230,6 +372,7 @@ class Session:
         finally:
             self.pending_question = None
             self.task = None
+            self._save_memory()
             self._start_queued()
 
     async def _chat(self, prompt: str) -> None:
@@ -243,6 +386,31 @@ class Session:
         )
         agent.memory.add_message(Message.assistant_message(answer))
         self.publish("chat", text=answer)
+
+    async def _flow(self, prompt: str) -> None:
+        """Plan the task first, then work through the plan - like run_flow.py."""
+        manus = await self.ensure_agent()
+        manus.current_step = 0
+        agents = {"manus": manus}
+        if config.run_flow_config.use_data_analysis_agent:
+            try:
+                analyst = create_data_analysis_agent(self)
+            except Exception as exc:  # charting dependencies are optional
+                self.publish(
+                    "log",
+                    level="WARNING",
+                    message=f"Агент анализа данных недоступен: {exc}",
+                )
+            else:
+                analyst.max_steps = self.max_steps
+                agents["data_analysis"] = analyst
+                self.publish(
+                    "log", level="INFO", message="Подключён агент анализа данных"
+                )
+
+        flow = FlowFactory.create_flow(flow_type=FlowType.PLANNING, agents=agents)
+        result = await asyncio.wait_for(flow.execute(prompt), timeout=FLOW_TIMEOUT)
+        self.publish("result", message=result)
 
     def _start_queued(self) -> None:
         if not self._queued:
@@ -263,16 +431,26 @@ class Session:
 
     async def cleanup(self) -> None:
         await self.stop()
-        try:  # do not leave empty task folders behind
-            self.workspace.rmdir()
-        except OSError:
-            pass
         if self.agent is not None:
+            self._save_memory()
             try:
                 await self.agent.cleanup()
             except Exception as exc:
                 logger.warning(f"Failed to clean up agent for {self.id}: {exc}")
             self.agent = None
+        try:  # do not leave empty task folders behind
+            self.workspace.rmdir()
+        except OSError:
+            pass
+
+    def forget(self) -> None:
+        """Remove what was stored on disk for this session."""
+        for name in ("meta.json", "events.jsonl", "memory.json"):
+            (self.store / name).unlink(missing_ok=True)
+        try:
+            self.store.rmdir()
+        except OSError:
+            pass
 
     def info(self) -> Dict[str, Any]:
         return {
@@ -283,5 +461,6 @@ class Session:
             "pending_question": self.pending_question,
             "queued": len(self._queued),
             "workspace": str(self.workspace),
+            "max_steps": self.max_steps,
             "tools": self.tools(),
         }

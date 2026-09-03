@@ -1,12 +1,13 @@
-"""Manus agent instrumented for the web interface.
+"""Agents instrumented for the web interface.
 
-The console agent reports what it does through log lines. The browser needs
+The console agents report what they do through log lines. The browser needs
 structured events instead - which tool is running, with which arguments, what
 it returned and whether it produced a screenshot - so the UI can mirror the
 agent's work the way the hosted Manus does.
 """
 
 import json
+from functools import lru_cache
 from typing import Any, Dict, List, Optional
 
 from app.agent.manus import Manus
@@ -33,13 +34,15 @@ def _looks_failed(result: str) -> bool:
     return head.startswith("Error") or "\nError:" in head or "Error: " in head
 
 
-class WebManus(Manus):
-    """Manus that reports every step to a web session."""
+class WebAgentMixin:
+    """Reports every step of a ToolCallAgent to a web session."""
 
     session: Any = None
 
     async def step(self) -> str:
-        self.session.publish("step", index=self.current_step, total=self.max_steps)
+        self.session.publish(
+            "step", index=self.current_step, total=self.max_steps, agent=self.name
+        )
         return await super().step()
 
     async def think(self) -> bool:
@@ -48,7 +51,7 @@ class WebManus(Manus):
         self.session.publish("llm", exchange=self._exchange())
         thought = self._last_assistant_content()
         if thought:
-            self.session.publish("thought", text=thought)
+            self.session.publish("thought", text=thought, agent=self.name)
         if self.tool_calls:
             self.session.publish(
                 "plan",
@@ -66,7 +69,6 @@ class WebManus(Manus):
 
         result = await super().execute_tool(command)
 
-        image = self._current_base64_image
         self.session.publish(
             "tool_end",
             call_id=command.id,
@@ -74,7 +76,7 @@ class WebManus(Manus):
             args=args,
             output=result[:MAX_OUTPUT_CHARS],
             truncated=len(result) > MAX_OUTPUT_CHARS,
-            image=image,
+            image=self._current_base64_image,
             failed=_looks_failed(result),
         )
         return result
@@ -99,3 +101,20 @@ class WebManus(Manus):
             if message.role == "user":
                 break
         return None
+
+
+class WebManus(WebAgentMixin, Manus):
+    """Manus that reports every step to a web session."""
+
+
+@lru_cache(maxsize=1)
+def _data_analysis_class():
+    """Imported late: charting pulls in heavy, optional dependencies."""
+    from app.agent.data_analysis import DataAnalysis
+
+    return type("WebDataAnalysis", (WebAgentMixin, DataAnalysis), {})
+
+
+def create_data_analysis_agent(session: Any):
+    """The charting agent the planning flow uses when it is switched on."""
+    return _data_analysis_class()(session=session)
