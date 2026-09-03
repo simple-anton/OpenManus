@@ -18,6 +18,7 @@ from app.config import config
 from app.logger import logger
 from app.web import api_tools as api_tools_store
 from app.web import diagnostics
+from app.web import presets as presets_store
 from app.web import settings as settings_store
 from app.web import skills as skills_store
 from app.web import store as store_catalogue
@@ -59,6 +60,10 @@ class SkillRequest(BaseModel):
 class ImportRequest(BaseModel):
     url: str
     force: bool = False
+
+
+class PresetsRequest(BaseModel):
+    presets: List[Dict[str, Any]]
 
 
 class StoreSourcesRequest(BaseModel):
@@ -508,6 +513,20 @@ def create_app() -> FastAPI:
             raise HTTPException(status_code=409, detail=_incompatible(exc))
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc))
+
+    # ----------------------------------------------------------------- presets
+
+    @app.get("/api/presets")
+    async def read_presets() -> Dict[str, Any]:
+        return {"presets": presets_store.read_presets()}
+
+    @app.post("/api/presets")
+    async def write_presets(request: PresetsRequest) -> Dict[str, Any]:
+        return {"presets": presets_store.write_presets(request.presets)}
+
+    @app.post("/api/presets/reset")
+    async def reset_presets() -> Dict[str, Any]:
+        return {"presets": presets_store.reset_presets()}
 
     # ------------------------------------------------------------------- store
 

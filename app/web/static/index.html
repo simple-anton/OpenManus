@@ -121,6 +121,9 @@
   .composer { max-width: 760px; margin: 0 auto; display: flex; gap: 9px; align-items: flex-end; background: var(--panel); border: 1px solid var(--line); border-radius: 13px; padding: 8px 8px 8px 14px; }
   textarea#prompt { flex: 1; resize: none; border: 0; outline: none; background: transparent; height: 24px; max-height: 180px; padding: 4px 0; line-height: 1.5; }
   .hint { max-width: 760px; margin: 6px auto 0; color: var(--muted); font-size: 11.5px; }
+  .chips { max-width: 760px; margin: 10px auto 0; display: flex; flex-wrap: wrap; gap: 8px; }
+  .chips button { font-size: 12.5px; padding: 6px 12px; border-radius: 20px; color: #4c4a45; }
+  .chips button:hover { background: var(--panel); }
 
   .picker { position: relative; }
   .menu { display: none; position: absolute; right: 0; top: 34px; z-index: 15; width: 320px; max-height: 320px; overflow-y: auto;
@@ -264,6 +267,7 @@
       <button type="button" id="attach" title="Положить файл в папку задачи, чтобы агент мог с ним работать">Файл</button>
       <button class="primary" type="submit">Отправить</button>
     </div>
+    <div class="chips" id="chips"></div>
     <div class="hint" id="hint">Enter — отправить, Shift+Enter — перенос строки</div>
   </form>
   <input type="file" id="file-input" multiple hidden />
@@ -423,6 +427,7 @@ let exchanges = [], preview = null, sessionInfo = null, appConfig = null;
 let settings = null, mcp = null, models = [], dialogSection = "llm";
 let skillList = [], skillCatalogue = [], apiTools = [], catalogueQuery = "";
 let storeData = null, storeQuery = "", storeTask = "", storePicks = null;
+let presets = [];
 
 const ICONS = {
   python_execute: "\u{1F40D}", str_replace_editor: "\u{1F4DD}", ask_human: "\u{1F4AC}",
@@ -1085,6 +1090,8 @@ const SECTIONS = [
     "Что подключается в режиме «План». Агент анализа данных умеет строить графики и делать отчёты по таблицам." },
   { id: "skills", label: "Навыки", note:
     "Ваши методички: как выполнять задачи определённого типа. Выбираются для конкретной задачи кнопкой «Навыки» наверху." },
+  { id: "presets", label: "Быстрые задачи", note:
+    "Кнопки под полем ввода. Каждая подставляет заготовку текста, выставляет режим и подключает нужные навыки — отправку вы делаете сами." },
   { id: "store", label: "Магазин навыков", note:
     "Каталог навыков, опубликованных на GitHub. Можно искать по названию, попросить подобрать под задачу и установить в один клик." },
   { id: "mcp", label: "Плагины (MCP)", note:
@@ -1259,6 +1266,7 @@ function renderDialog() {
   const form = $("dialog-form");
   form.innerHTML = "";
   $("save-settings").style.display = dialogSection === "skills" ? "none" : "";
+  if (dialogSection === "presets") return renderPresetsSection(form);
   if (dialogSection === "store") return renderStoreSection(form);
   if (dialogSection === "mcp") return renderMcpSection(form);
   if (dialogSection === "skills") return renderSkillsSection(form);
@@ -1289,6 +1297,100 @@ function renderTaskSection(form) {
   control.appendChild(element("div", "note", sessionInfo.workspace));
   info.appendChild(control);
   form.appendChild(info);
+}
+
+function renderPresetsSection(form) {
+  form.appendChild(element("div", "section-title", "Быстрые задачи"));
+  form.appendChild(element("div", "note",
+    "Заготовка — это начало формулировки, а не готовая команда: угловые скобки <так> " +
+    "подсвечиваются, чтобы сразу дописать своё. Режим и навыки применяются вместе с текстом."));
+
+  const list = element("div", "preset-list");
+  presets.forEach((preset, index) => list.appendChild(presetCard(preset, index)));
+  form.appendChild(list);
+
+  const row = element("div", "server-row");
+  const add = element("button", null, "Добавить кнопку");
+  add.onclick = () => {
+    presets.push({ id: "preset-" + Date.now(), title: "", prompt: "", mode: "agent", skills: [] });
+    renderDialog();
+  };
+  const save = element("button", "primary", "Сохранить");
+  save.onclick = async () => {
+    try {
+      presets = (await api("/api/presets", {
+        method: "POST", body: JSON.stringify({ presets: presets }),
+      })).presets;
+      renderChips();
+      renderDialog();
+      dialogStatus("Быстрые задачи сохранены", "ok");
+    } catch (error) {
+      dialogStatus("Не удалось: " + error.message, "bad");
+    }
+  };
+  const reset = element("button", "ghost", "Вернуть стандартные");
+  reset.onclick = async () => {
+    presets = (await api("/api/presets/reset", { method: "POST" })).presets;
+    renderChips();
+    renderDialog();
+    dialogStatus("Восстановлен стандартный набор", "ok");
+  };
+  row.append(add, save, reset);
+  form.appendChild(row);
+}
+
+function presetCard(preset, index) {
+  const box = element("div", "toolcard");
+  const head = element("div", "server-row");
+  const title = document.createElement("input");
+  title.className = "rest";
+  title.placeholder = "надпись на кнопке";
+  title.value = preset.title || "";
+  title.oninput = () => { preset.title = title.value; };
+  const mode = document.createElement("select");
+  [["agent", "Агент"], ["flow", "План"], ["chat", "Чат"]].forEach(([value, label]) => {
+    const option = document.createElement("option");
+    option.value = value;
+    option.textContent = label;
+    mode.appendChild(option);
+  });
+  mode.value = preset.mode || "agent";
+  mode.onchange = () => { preset.mode = mode.value; };
+  const kill = element("button", "ghost", "✕");
+  kill.onclick = () => { presets.splice(index, 1); renderDialog(); };
+  head.append(title, mode, kill);
+  box.appendChild(head);
+
+  const prompt = document.createElement("textarea");
+  prompt.rows = 3;
+  prompt.placeholder = "Заготовка текста. Места для подстановки помечайте <так>";
+  prompt.value = preset.prompt || "";
+  prompt.oninput = () => { preset.prompt = prompt.value; };
+  prompt.style.cssText = "width:100%;border:1px solid var(--line);border-radius:8px;padding:8px;margin:8px 0";
+  box.appendChild(prompt);
+
+  if (skillList.length) {
+    const label = element("div", "note", "Навыки, которые подключатся вместе с этой кнопкой:");
+    box.appendChild(label);
+    const skills = element("div", "server-row");
+    skills.style.flexWrap = "wrap";
+    skillList.forEach((skill) => {
+      const tag = document.createElement("label");
+      tag.style.cssText = "display:flex;gap:5px;align-items:center;font-size:12px";
+      const check = document.createElement("input");
+      check.type = "checkbox";
+      check.checked = (preset.skills || []).includes(skill.slug);
+      check.onchange = () => {
+        const chosen = new Set(preset.skills || []);
+        if (check.checked) chosen.add(skill.slug); else chosen.delete(skill.slug);
+        preset.skills = Array.from(chosen);
+      };
+      tag.append(check, document.createTextNode(skill.name));
+      skills.appendChild(tag);
+    });
+    box.appendChild(skills);
+  }
+  return box;
 }
 
 function renderStoreSection(form) {
@@ -1979,6 +2081,7 @@ async function openSettings() {
   mcp = await api("/api/mcp");
   const skillData = await api("/api/skills");
   skillList = skillData.skills;
+  if (!presets.length) await loadPresets();
   skillCatalogue = skillData.catalogue || [];
   apiTools = (await api("/api/api-tools")).tools;
   try {
@@ -2124,6 +2227,7 @@ $("prompt").addEventListener("keydown", (event) => {
 $("prompt").addEventListener("input", (event) => {
   event.target.style.height = "24px";
   event.target.style.height = Math.min(event.target.scrollHeight, 180) + "px";
+  renderChips();
 });
 
 /* drag and drop files onto the panel */
@@ -2139,6 +2243,57 @@ const computer = $("computer");
 computer.addEventListener("drop", (event) => {
   if (event.dataTransfer && event.dataTransfer.files.length) uploadFiles(event.dataTransfer.files);
 });
+
+/* ------------------------------------------------------ quick tasks */
+async function loadPresets() {
+  try {
+    presets = (await api("/api/presets")).presets;
+  } catch (error) {
+    presets = [];
+  }
+  renderChips();
+}
+
+function renderChips() {
+  const row = $("chips");
+  row.innerHTML = "";
+  if ($("prompt").value.trim()) return;  // out of the way once you start typing
+  presets.forEach((preset) => {
+    const chip = element("button", null, preset.title);
+    chip.type = "button";
+    chip.title = preset.prompt
+      ? "Подставит заготовку: " + preset.prompt.slice(0, 120)
+      : "Переключит режим";
+    chip.onclick = () => applyPreset(preset);
+    row.appendChild(chip);
+  });
+}
+
+async function applyPreset(preset) {
+  if (!currentId) {
+    const info = await api("/api/sessions", { method: "POST" });
+    await selectTask(info.id);
+  }
+  setMode(preset.mode || "agent");
+  const input = $("prompt");
+  input.value = preset.prompt || "";
+  input.dispatchEvent(new Event("input"));
+  input.focus();
+  const placeholder = input.value.indexOf("<");
+  if (placeholder >= 0) {
+    input.setSelectionRange(placeholder, input.value.indexOf(">", placeholder) + 1);
+  }
+  if ((preset.skills || []).length) {
+    try {
+      sessionInfo = await api("/api/sessions/" + currentId, {
+        method: "PATCH", body: JSON.stringify({ skills: preset.skills }),
+      });
+      renderSkillsButton();
+    } catch (error) {
+      append(card("error", "Навыки не подключились", error.message));
+    }
+  }
+}
 
 /* ---------------------------------------------------- skills picker */
 async function refreshSkills() {
@@ -2239,6 +2394,7 @@ $("skill-file").onchange = async (event) => {
   if (existing) await selectTask(existing.id);
   else { renderEmpty(); await loadTasks(); }
   await refreshSkills();
+  await loadPresets();
 })();
 </script>
 </body>

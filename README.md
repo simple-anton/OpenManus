@@ -206,7 +206,12 @@ Three things extend what the agent can do, all from the same dialog:
   when the model's answer cannot be parsed the keyword match is shown instead,
   labelled as such. GitHub is read without credentials - enough for browsing, but
   limited to 60 requests an hour - and an optional personal access token in the
-  same section raises that. The dialog also lists verified public skills from Anthropic's open
+  same section raises that.
+
+Under the composer sit quick tasks: chips that fill the input with a starting
+formulation, switch the mode and attach the skills that task needs, leaving the
+sending to you. They are defined in `config/presets.json` and edited in the same
+dialog. The dialog also lists verified public skills from Anthropic's open
   repository for one-click import. Attach the ones a task needs and their text is
   appended to the agent's system prompt.
 - **Plugins** - a catalogue of ready MCP servers (Python ones run through `uvx`,
