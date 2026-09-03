@@ -22,6 +22,9 @@ from app.logger import logger
 
 SKILLS_DIR = PROJECT_ROOT / "config" / "skills"
 MAX_SKILL_CHARS = 60_000
+# how much of the attached skills the planner is shown before they are cut
+PLANNING_BUDGET = 6_000
+MIN_PLANNING_SECTION = 400  # less than this left over is not worth showing
 RAW_HOST = "https://raw.githubusercontent.com"
 GITHUB_API = "https://api.github.com"
 # where Manus keeps skills inside its own sandbox; rewritten to our folder
@@ -275,30 +278,71 @@ def bundle_files(slug: str) -> List[str]:
     )
 
 
+def _skill_section(slug: str) -> Optional[str]:
+    """One skill as it is shown to a model: heading, description, body, files."""
+    skill = read_skill(slug)
+    if not skill:
+        return None
+    section = (
+        f"# Навык: {skill['name']}\n" f"{skill['description']}\n\n{skill['body']}"
+    ).strip()
+    extra = bundle_files(slug)
+    if extra:
+        # the skill text refers to its own files; say where they are
+        section += (
+            f"\n\nФайлы этого навыка лежат в {SKILLS_DIR / slug} — "
+            f"открывайте их оттуда: {', '.join(extra[:20])}."
+        )
+    return section
+
+
 def prompt_for(slugs: List[str]) -> str:
     """The text appended to the system prompt for the attached skills."""
-    parts = []
-    for slug in slugs:
-        skill = read_skill(slug)
-        if skill:
-            section = (
-                f"# Навык: {skill['name']}\n"
-                f"{skill['description']}\n\n{skill['body']}".strip()
-            )
-            extra = bundle_files(slug)
-            if extra:
-                # the skill text refers to its own files; say where they are
-                section += (
-                    f"\n\nФайлы этого навыка лежат в {SKILLS_DIR / slug} — "
-                    f"открывайте их оттуда: {', '.join(extra[:20])}."
-                )
-            parts.append(section)
+    parts = [section for section in map(_skill_section, slugs) if section]
     if not parts:
         return ""
     return (
         "\n\nНиже приведены навыки — методики, которым нужно следовать "
         "при выполнении задачи.\n\n" + "\n\n---\n\n".join(parts)
     )
+
+
+def planning_prompt_for(slugs: List[str], budget: int = PLANNING_BUDGET) -> str:
+    """The same skills for the planner, kept within a budget.
+
+    The planner only decides what the steps are; the agent that carries them out
+    gets every skill in full anyway. So a long methodology is cut short here
+    rather than sent whole with each planning call - and the cut is said out
+    loud, so nobody mistakes the trimmed text for the whole skill.
+    """
+    sections: List[str] = []
+    trimmed = False
+    used = 0
+    for slug in slugs:
+        section = _skill_section(slug)
+        if not section:
+            continue
+        room = budget - used
+        if room < MIN_PLANNING_SECTION and sections:
+            trimmed = True  # what is left would be a scrap of a sentence
+            continue
+        if len(section) > room:
+            section = section[:room].rstrip() + "\n[…]"
+            trimmed = True
+        sections.append(section)
+        used += len(section)
+    if not sections:
+        return ""
+    text = (
+        "Навыки, подключённые к задаче, — методики, под которые нужно "
+        "подстроить план.\n\n" + "\n\n---\n\n".join(sections)
+    )
+    if trimmed:
+        text += (
+            "\n\n(Текст навыков показан не целиком — исполнитель шагов "
+            "получает его полностью.)"
+        )
+    return text
 
 
 # ------------------------------------------------------------------ importing

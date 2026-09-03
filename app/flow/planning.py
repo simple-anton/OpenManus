@@ -50,6 +50,9 @@ class PlanningFlow(BaseFlow):
     executor_keys: List[str] = Field(default_factory=list)
     active_plan_id: str = Field(default_factory=lambda: f"plan_{int(time.time())}")
     current_step_index: Optional[int] = None
+    # Guidance the caller wants the plan itself to respect, e.g. the skills the
+    # user attached to the task. The executors get it through their own prompts.
+    planning_context: str = Field(default="")
 
     def __init__(
         self, agents: Union[BaseAgent, List[BaseAgent], Dict[str, BaseAgent]], **data
@@ -157,6 +160,13 @@ class PlanningFlow(BaseFlow):
                 f"\nNow we have {agents_description} agents. "
                 f"The infomation of them are below: {json.dumps(agents_description)}\n"
                 "When creating steps in the planning tool, please specify the agent names using the format '[agent_name]'."
+            )
+
+        if self.planning_context:
+            system_message_content += (
+                "\nThe plan must follow the guidance below, which the user "
+                "attached to this task. Shape the steps around it.\n"
+                f"{self.planning_context}"
             )
 
         # Create a system message for plan creation

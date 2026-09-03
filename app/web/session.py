@@ -463,12 +463,19 @@ class Session:
                 )
             else:
                 analyst.max_steps = self.max_steps
+                # the analyst has its own prompt; the task's skills apply to it too
+                analyst.system_prompt += skills_store.prompt_for(self.skills)
                 agents["data_analysis"] = analyst
                 self.publish(
                     "log", level="INFO", message="Подключён агент анализа данных"
                 )
 
-        flow = FlowFactory.create_flow(flow_type=FlowType.PLANNING, agents=agents)
+        # the planner writes the steps, so it has to know the skills as well
+        flow = FlowFactory.create_flow(
+            flow_type=FlowType.PLANNING,
+            agents=agents,
+            planning_context=skills_store.planning_prompt_for(self.skills),
+        )
         result = await asyncio.wait_for(flow.execute(prompt), timeout=FLOW_TIMEOUT)
         self.publish("result", message=result)
 
