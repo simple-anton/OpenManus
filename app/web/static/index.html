@@ -723,13 +723,23 @@ function renderView() {
   view.appendChild(head);
 
   if (tab === "browser") {
-    if (step.image) {
+    // картинка приходит с событием, но живёт в памяти недолго; на диске
+    // контейнера она остаётся, поэтому старый шаг всё равно можно посмотреть
+    const source = step.image ? imageSrc(step.image) : step.shot;
+    if (source) {
       const img = document.createElement("img");
       img.className = "shot";
-      img.src = imageSrc(step.image);
+      img.src = source;
       view.appendChild(img);
     } else if (step.image_dropped) {
-      view.appendChild(element("pre", "block out", "Снимок экрана этого шага уже вытеснен из памяти."));
+      view.appendChild(element("pre", "block out",
+        "Снимок этого шага не сохранился: он был сделан до обновления или контейнер с тех пор пересоздавали."));
+    } else if (!step.name.startsWith("browser")) {
+      const hint = element("div", "placeholder");
+      hint.innerHTML = "На этом шаге браузер не участвовал — снимать было нечего.<br />" +
+        "Снимки появляются, когда агент открывает страницу браузером.<br /><br />" +
+        "Нужен снимок — попросите прямо: «открой сайт в браузере и покажи снимок».";
+      view.appendChild(hint);
     }
     if (step.args && Object.keys(step.args).length) {
       view.appendChild(element("pre", "block", JSON.stringify(step.args, null, 2)));
@@ -1089,7 +1099,7 @@ function render(event) {
         steps.push(step);
       }
       Object.assign(step, {
-        output: event.output, image: event.image, image_dropped: event.image_dropped,
+        output: event.output, image: event.image, image_dropped: event.image_dropped, shot: event.shot,
         failed: event.failed, done: true,
       });
       const row = stack.querySelector('.tool[data-call-id="' + CSS.escape(event.call_id) + '"]');

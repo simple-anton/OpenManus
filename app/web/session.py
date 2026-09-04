@@ -19,6 +19,7 @@ from app.logger import logger
 from app.prompt.manus import SYSTEM_PROMPT
 from app.schema import Message
 from app.tool.base import BaseTool
+from app.web import agent as web_agent
 from app.web import api_tools, diagnostics
 from app.web import skills as skills_store
 from app.web.agent import WebManus, create_data_analysis_agent
@@ -579,6 +580,9 @@ class Session:
             self.store.rmdir()
         except OSError:
             pass
+        shots = web_agent.SHOTS_DIR / self.id
+        if shots.is_dir():
+            shutil.rmtree(shots, ignore_errors=True)
         if remove_files:
             self._remove_workspace()
 

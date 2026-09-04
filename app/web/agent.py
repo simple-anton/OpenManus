@@ -7,16 +7,27 @@ agent's work the way the hosted Manus does.
 """
 
 import ast
+import base64
 import json
+import os
 import re
 import time
+import uuid
 from functools import lru_cache
+from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from app.agent.manus import Manus
+from app.logger import logger
 from app.schema import ToolCall
 from app.web import diagnostics
 
+# Screenshots live inside the container, not in the mounted workspace: they are
+# working material, and the user asked for them to go away with the container.
+# Kept as files so the transcript still shows them after a page reload, once the
+# in-memory copy has been evicted.
+SHOTS_DIR = Path(os.getenv("OPENMANUS_SHOTS", "/tmp/openmanus-screenshots"))
+MAX_SHOTS_PER_TASK = 200
 
 # tool output shown in the UI; the agent itself still sees max_observe chars
 MAX_OUTPUT_CHARS = 20000
@@ -57,6 +68,39 @@ def _readable(output: str) -> str:
             if isinstance(value, str) and value.strip():
                 return value.strip()
     return text
+
+
+def save_screenshot(session_id: str, data: str) -> Optional[str]:
+    """Put a screenshot on the container's own disk and return its address.
+
+    The event stream keeps the picture itself only for the newest steps, and
+    the stored history never keeps it at all - a path costs nothing and lets an
+    old step still show what the agent saw.
+    """
+    folder = SHOTS_DIR / str(session_id)
+    try:
+        folder.mkdir(parents=True, exist_ok=True)
+        # хвост из случайных символов: два снимка в одну миллисекунду бывают
+        name = f"{int(time.time() * 1000)}-{uuid.uuid4().hex[:6]}.png"
+        (folder / name).write_bytes(base64.b64decode(data))
+    except (OSError, ValueError) as exc:
+        logger.warning(f"Could not save the screenshot: {exc}")
+        return None
+    _trim_shots(folder)
+    return f"/api/screenshots/{session_id}/{name}"
+
+
+def _trim_shots(folder: Path) -> None:
+    """A long browsing run must not fill the container's disk."""
+    try:
+        shots = sorted(folder.glob("*.png"), key=lambda p: p.stat().st_mtime)
+    except OSError:
+        return
+    for path in shots[:-MAX_SHOTS_PER_TASK]:
+        try:
+            path.unlink()
+        except OSError:
+            pass
 
 
 def _plural(count: int, one: str, few: str, many: str) -> str:
@@ -150,6 +194,11 @@ class WebAgentMixin:
             # запасной итог: если модель завершит работу молча, показать это
             self.session.last_output = {"name": name, "text": _readable(result)}
 
+        shot = (
+            save_screenshot(self.session.id, self._current_base64_image)
+            if self._current_base64_image
+            else None
+        )
         self.session.publish(
             "tool_end",
             call_id=command.id,
@@ -158,6 +207,7 @@ class WebAgentMixin:
             output=result[:MAX_OUTPUT_CHARS],
             truncated=len(result) > MAX_OUTPUT_CHARS,
             image=self._current_base64_image,
+            shot=shot,
             failed=failed,
             seconds=round(time.monotonic() - started, 1),
             diagnosis=diagnostics.tool_failure(name, result) if failed else None,

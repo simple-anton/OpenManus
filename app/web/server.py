@@ -18,6 +18,7 @@ from pydantic import BaseModel
 
 from app.config import config
 from app.logger import logger
+from app.web import agent as web_agent
 from app.web import api_tools as api_tools_store
 from app.web import diagnostics
 from app.web import presets as presets_store
@@ -652,6 +653,15 @@ def create_app() -> FastAPI:
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc))
         return {"result": result, "ok": not result.startswith("Error")}
+
+    @app.get("/api/screenshots/{session_id}/{name}")
+    async def screenshot(session_id: str, name: str) -> FileResponse:
+        """A screenshot the agent took, from the container's own disk."""
+        root = (web_agent.SHOTS_DIR / session_id).resolve()
+        target = (root / name).resolve()
+        if not target.is_file() or root not in target.parents:
+            raise HTTPException(status_code=404, detail="Снимок не найден")
+        return FileResponse(target, media_type="image/png")
 
     @app.get("/api/health")
     async def health() -> Dict[str, Any]:
