@@ -27,7 +27,6 @@ from app.web import skills as skills_store
 from app.web import store as store_catalogue
 from app.web.session import Session
 
-
 STATIC_DIR = Path(__file__).parent / "static"
 IMAGE_SUFFIXES = {".png", ".jpg", ".jpeg", ".gif", ".webp", ".svg"}
 MAX_PREVIEW_BYTES = 4 * 1024 * 1024
@@ -220,6 +219,7 @@ def create_app() -> FastAPI:
             filter=lambda record: "web_session" in record["extra"],
         )
         settings_store.prune_logs()
+        web_agent.clear_screenshots()
         SESSIONS.update(Session.restore_all())
         logger.info("OpenManus web interface ready")
         try:

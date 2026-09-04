@@ -11,6 +11,7 @@ import base64
 import json
 import os
 import re
+import shutil
 import time
 import uuid
 from functools import lru_cache
@@ -21,6 +22,7 @@ from app.agent.manus import Manus
 from app.logger import logger
 from app.schema import ToolCall
 from app.web import diagnostics
+
 
 # Screenshots live inside the container, not in the mounted workspace: they are
 # working material, and the user asked for them to go away with the container.
@@ -68,6 +70,27 @@ def _readable(output: str) -> str:
             if isinstance(value, str) and value.strip():
                 return value.strip()
     return text
+
+
+def clear_screenshots() -> int:
+    """Wipe every screenshot at start-up.
+
+    Screenshots are the shortest-lived thing here: material for looking at
+    while the work happens. Tying their removal to how the user stops the
+    container would be fragile - a laptop lid closes without any stop script -
+    so each start of the interface begins with an empty folder.
+    """
+    if not SHOTS_DIR.exists():
+        return 0
+    count = sum(1 for _ in SHOTS_DIR.rglob("*.png"))
+    try:
+        shutil.rmtree(SHOTS_DIR)
+    except OSError as exc:
+        logger.warning(f"Could not clear old screenshots: {exc}")
+        return 0
+    if count:
+        logger.info(f"Removed {count} screenshot(s) from the previous session")
+    return count
 
 
 def save_screenshot(session_id: str, data: str) -> Optional[str]:
