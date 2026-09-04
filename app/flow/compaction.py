@@ -46,6 +46,7 @@ def forget_previous_step(agent: Any) -> int:
 
     Возвращает, сколько сообщений выброшено — чтобы это было видно в логе.
     """
+    _reset_blocked_sources(agent)
     memory = getattr(agent, "memory", None)
     if memory is None:
         return 0
@@ -57,6 +58,24 @@ def forget_previous_step(agent: Any) -> int:
             f"снято {dropped} сообщений. Контекст приходит из журнала находок."
         )
     return dropped
+
+
+def _reset_blocked_sources(agent: Any) -> None:
+    """Закрытые источники — забота того пункта, где они встретились.
+
+    Без сброса источник, не поддавшийся на втором пункте, возвращал бы агента
+    к себе и на пятом, где он уже не имеет отношения к делу. А проверку
+    браузером мы ищем в разговоре, который к новому пункту очищен, — значит
+    список тоже надо начинать заново.
+    """
+    tools = getattr(agent, "available_tools", None)
+    fetch = getattr(tools, "tool_map", {}).get("fetch") if tools else None
+    if fetch is not None and hasattr(fetch, "blocked_urls"):
+        fetch.blocked_urls.clear()
+    if hasattr(agent, "blocked_nudges_left"):
+        agent.blocked_nudges_left = type(agent).model_fields[
+            "blocked_nudges_left"
+        ].default
 
 
 def squash_old_observations(

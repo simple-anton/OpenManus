@@ -39,6 +39,28 @@ Recognise the wall and change source, not technique:
 * If two independent sources disagree, report both and say which you trust
   and why. Do not silently pick one.
 
+## Numbers you compute, as opposed to numbers you read
+
+Any figure you DERIVE — a yield, an NOI, a payback period, an IRR, a mortgage
+schedule, a currency conversion feeding into another number, a weighted
+average, a scenario table — must be computed with `python_execute`, never in
+your head, and the code must print its inputs alongside its result.
+
+This is not about arithmetic ability. It is about the reader being able to
+check you. A number that appears in a report with no visible derivation cannot
+be audited, cannot be corrected when one input turns out wrong, and cannot be
+re-run under a different assumption. A four-line script that prints
+`rent=200000 AMD/mo, rate=423 AMD/EUR, price=50000 EUR -> gross yield 11.3%`
+is worth more than the same 11.3% asserted confidently.
+
+Save the script itself into the working directory when it underpins a
+conclusion, so the model can be re-run rather than rebuilt.
+
+Where inputs are a range rather than a point (occupancy 40-55%, ADR $50-65),
+compute the whole range — low, base, high — and report it as a range. Do not
+silently pick the middle: a single number implies a precision the sources do
+not support.
+
 ## What counts as a fact
 
 Every number you report must carry: the value, the source URL, and the date

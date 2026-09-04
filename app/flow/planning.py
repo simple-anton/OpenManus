@@ -393,6 +393,12 @@ class PlanningFlow(BaseFlow):
         return f"""
         BEFORE YOU FINISH THIS STEP — these two rules are mandatory:
 
+        0. COMPUTE, DO NOT ESTIMATE. Every derived figure in this step — yields,
+           NOI, payback, mortgage costs, conversions that feed other numbers —
+           goes through `python_execute`, printing its inputs next to its
+           result. Ranged inputs produce ranged outputs (low/base/high), never
+           a single number that hides the spread.
+
         1. RECORD WHAT YOU FOUND. Your conversation for this step is thrown away
            afterwards; later steps see ONLY what you write down. Append every
            number, rate, price, date and conclusion you obtained to {where}

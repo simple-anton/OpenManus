@@ -27,6 +27,8 @@ from bs4 import BeautifulSoup
 
 from app.config import config
 from app.logger import logger
+from pydantic import Field
+
 from app.tool.base import BaseTool, ToolResult
 
 
@@ -49,6 +51,18 @@ HEADERS = {
     ),
     "Accept-Language": "en-US,en;q=0.9,ru;q=0.8,hy;q=0.7",
 }
+
+# Что делать с источником, который прямым запросом не открылся. Формулировка
+# намеренно предписывающая и с конкретным адресом: в разобранном прогоне общий
+# совет «попробуйте browser_exec» был проигнорирован четыре раза подряд, и
+# закрытый источник молча заменялся пересказом из поисковой выдачи.
+_ESCALATE = (
+    "\nСЛЕДУЮЩЕЕ ДЕЙСТВИЕ: откройте этот же адрес через browser_exec:\n"
+    "    new_tab(\"{url}\"); wait_for_load(); print(js(\"document.body.innerText\"))\n"
+    "Не подменяйте этот источник пересказом из поисковой выдачи и не объявляйте "
+    "его недоступным, пока браузер не попробовал. Если и браузер не справится — "
+    "так и запишите, назвав оба способа."
+)
 
 # теги, чей текст не имеет отношения к содержанию страницы
 NOISE = ("script", "style", "noscript", "template", "svg", "iframe")
@@ -169,6 +183,13 @@ class Fetch(BaseTool):
     # удалялись вместе с ней.
     directory: str = ""
 
+    # Адреса, которые прямым запросом не даются: 403, антибот, страница
+    # собирается скриптами. Их берёт браузер. В разборе прогона агент такие
+    # источники просто бросал и подменял поисковой выдачей — по list.am,
+    # главной доске объявлений Армении, так потерялись все прямые данные.
+    # Список читает агент перед завершением шага, см. app/agent/manus.py.
+    blocked_urls: List[str] = Field(default_factory=list)
+
     parameters: dict = {
         "type": "object",
         "properties": {
@@ -256,6 +277,9 @@ class Fetch(BaseTool):
 
         if response.status_code >= 400:
             hint = _blocked_hint(response.status_code, raw, content_type)
+            if response.status_code in (401, 403, 429):
+                self._remember_blocked(landed)
+                hint += _ESCALATE.format(url=landed)
             return f"{head}\nСТРАНИЦА НЕ ОТДАНА.{hint}"
         if probe_only:
             return f"{head}\n(запрошена только проверка адреса)"
@@ -279,15 +303,23 @@ class Fetch(BaseTool):
         if saved:
             head += f"\nсохранено в файл: {saved}"
         if blocked:
-            head += f"\nПОХОЖЕ НА ЗАЩИТУ ОТ БОТОВ ({blocked}) — этот источник так не взять."
+            self._remember_blocked(landed)
+            head += (
+                f"\nПОХОЖЕ НА ЗАЩИТУ ОТ БОТОВ ({blocked}) — прямым запросом "
+                "этот источник не взять." + _ESCALATE.format(url=landed)
+            )
         elif script_built:
+            self._remember_blocked(landed)
             head += (
                 "\nТЕКСТА ПОЧТИ НЕТ: страница весит много, а читаемого текста "
-                "мало — обычно это значит, что содержимое рисуют скрипты. "
-                "Ниже, скорее всего, только меню. За данными идите сюда "
-                "через browser_exec."
+                "мало — содержимое рисуют скрипты, ниже только меню."
+                + _ESCALATE.format(url=landed)
             )
         return f"{head}\n\n{body}"
+
+    def _remember_blocked(self, url: str) -> None:
+        if url not in self.blocked_urls:
+            self.blocked_urls.append(url)
 
     def _save_if_binary(self, url: str, content_type: str, raw: bytes) -> Optional[str]:
         """Документы кладём в рабочую папку: они ещё понадобятся python_execute."""
@@ -341,7 +373,8 @@ def _explain(error: httpx.HTTPError) -> str:
 
 def _blocked_hint(status: int, raw: bytes, content_type: str) -> str:
     if status in (401, 403):
-        return " Доступ закрыт (403/401): нужен вход или сайт не пускает автоматику. Попробуйте browser_exec."
+        # что делать дальше, скажет _ESCALATE — здесь только причина отказа
+        return " Доступ закрыт (403/401): нужен вход или сайт не пускает автоматику."
     if status == 404:
         return " Такой страницы нет. Не подбирайте адрес вручную — найдите ссылку поиском или в карте сайта."
     if status == 429:

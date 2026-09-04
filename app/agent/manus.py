@@ -1,5 +1,5 @@
 import os
-from typing import Dict, List, Optional
+from typing import Any, Dict, List, Optional
 
 from pydantic import Field
 
@@ -72,12 +72,64 @@ class Manus(ToolCallAgent):
 
     special_tool_names: list[str] = Field(default_factory=lambda: [Terminate().name])
 
+    # Сколько раз за шаг мы возвращаем агента к брошенному источнику. Одного
+    # раза достаточно: если он и после напоминания решит не открывать браузер,
+    # это уже осознанный выбор, а не недосмотр. Больше — риск зациклиться.
+    blocked_nudges_left: int = 1
+
     # Track connected MCP servers
     connected_servers: Dict[str, str] = Field(
         default_factory=dict
     )  # server_id -> url/command
     mcp_instruction_servers: set[str] = Field(default_factory=set, exclude=True)
     _initialized: bool = False
+
+    def _abandoned_sources(self) -> list[str]:
+        """Источники, которые fetch пометил закрытыми, а браузер не открывал."""
+        fetch = self.available_tools.tool_map.get("fetch")
+        blocked = list(getattr(fetch, "blocked_urls", []) or [])
+        if not blocked:
+            return []
+        # Что уже отдавали браузеру — ищем по тексту его вызовов в разговоре.
+        tried = "".join(
+            call.function.arguments or ""
+            for message in self.memory.messages
+            if message.tool_calls
+            for call in message.tool_calls
+            if call.function.name.startswith("browser")
+        )
+        return [url for url in blocked if url not in tried]
+
+    async def _handle_special_tool(self, name: str, result: Any, **kwargs):
+        """Не даём закрыть шаг, бросив источник непопробованным.
+
+        В разобранном прогоне fetch четыре раза сказал «идите через
+        browser_exec», list.am отдал 403 — и агент ни разу не открыл браузер,
+        подменив главную доску объявлений страны пересказом из поисковой
+        выдачи. Совет в тексте ответа оказался слишком слабым средством.
+        """
+        if self._is_special_tool(name) and self.blocked_nudges_left > 0:
+            abandoned = self._abandoned_sources()
+            if abandoned:
+                self.blocked_nudges_left -= 1
+                listed = "\n".join(f"  - {url}" for url in abandoned[:5])
+                self.memory.add_message(
+                    Message.user_message(
+                        "Шаг ещё не закончен. Эти источники прямым запросом не "
+                        f"открылись, и браузер к ним не применялся:\n{listed}\n"
+                        "Откройте их через browser_exec — new_tab(адрес), "
+                        "wait_for_load(), затем js(\"document.body.innerText\"). "
+                        "Если браузер тоже не справится, запишите это в находки "
+                        "и тогда завершайте шаг. Данные из первоисточника "
+                        "весомее пересказа поисковой выдачи."
+                    )
+                )
+                logger.info(
+                    f"Завершение шага отложено: {len(abandoned)} источников "
+                    "закрыты и не проверены браузером"
+                )
+                return  # состояние FINISHED не выставляем, шаг продолжается
+        await super()._handle_special_tool(name=name, result=result, **kwargs)
 
     @classmethod
     async def create(cls, **kwargs) -> "Manus":
