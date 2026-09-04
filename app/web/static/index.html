@@ -182,6 +182,10 @@
   .toolcard b { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12.5px; }
   .clamped { display: -webkit-box; -webkit-line-clamp: 4; -webkit-box-orient: vertical; overflow: hidden; }
   .tablewrap { overflow-x: auto; margin: 10px 0; }
+  .card.warn .body { margin-top: 8px; font-size: 13px; line-height: 1.55; }
+  .card.warn .body table { border-collapse: collapse; font-size: 12.5px; min-width: 100%; }
+  .card.warn .body th, .card.warn .body td { border: 1px solid var(--line); padding: 5px 9px; text-align: left; }
+  .card.warn .body pre { white-space: pre-wrap; word-break: break-word; }
   .agent .body table { border-collapse: collapse; font-size: 12.5px; min-width: 100%; }
   .agent .body th, .agent .body td { border: 1px solid var(--line); padding: 6px 10px; text-align: left; vertical-align: top; }
   .agent .body th { background: #f2efe9; font-weight: 600; white-space: nowrap; }
@@ -1107,6 +1111,21 @@ function render(event) {
       $("prompt").focus();
       break;
     case "result": {
+      // модель иногда доводит работу до конца и молча вызывает terminate:
+      // тогда ответом остаётся вывод последнего инструмента — покажем его
+      if (event.answer && event.answer_source === "tool") {
+        const spare = element("div", "card warn");
+        spare.appendChild(element("h4", null, "Модель не написала ответа"));
+        spare.appendChild(element("div", "text",
+          "Работа закончена, но итогового текста от модели нет. Вот что вернул последний шаг:"));
+        const body = element("div", "body");
+        body.innerHTML = markdown(event.answer);
+        spare.appendChild(body);
+        spare.appendChild(element("div", "advice",
+          "Что сделать: попросите «сформулируй ответ текстом» следующим сообщением — " +
+          "или смените модель: некоторые склонны молча завершать работу."));
+        append(spare);
+      }
       const done = element("div", "card result");
       done.appendChild(element("h4", null, "Задача завершена"));
       done.appendChild(element("div", "text",

@@ -46,6 +46,13 @@ CHAT_PROMPT = (
     "которого ты не совершал."
 )
 
+ANSWER_PROMPT = (
+    "\n\nПрежде чем вызвать terminate, напиши пользователю итоговый ответ "
+    "обычным текстом: сам результат, а не пересказ своих действий. Если "
+    "результат — данные, приведи их прямо в ответе, таблицей, если она уместна. "
+    "Вывод инструментов — это черновик, ответом он не считается."
+)
+
 WORKSPACE = Path(config.workspace_root)
 STORE = WORKSPACE / ".sessions"
 
@@ -91,6 +98,7 @@ class Session:
         self.task: Optional[asyncio.Task] = None
         self.state = "idle"
         self.mode = "agent"  # what the current run was started as
+        self.last_output: Optional[Dict[str, str]] = None
         self.pending_question: Optional[str] = None
 
         self.history: List[Dict[str, Any]] = []
@@ -291,9 +299,11 @@ class Session:
         """Point the agent at this task's folder and its attached skills."""
         if self.agent is None:
             return
-        self.agent.system_prompt = SYSTEM_PROMPT.format(
-            directory=self.workspace
-        ) + skills_store.prompt_for(self.skills)
+        self.agent.system_prompt = (
+            SYSTEM_PROMPT.format(directory=self.workspace)
+            + ANSWER_PROMPT
+            + skills_store.prompt_for(self.skills)
+        )
 
     def set_skills(self, slugs: List[str]) -> None:
         self.skills = [slug for slug in slugs if skills_store.read_skill(slug)]
@@ -421,7 +431,10 @@ class Session:
                     agent = await self.ensure_agent()
                     agent.current_step = 0
                     result = await agent.run(prompt)
-                    self.publish("result", message=result)
+                    answer, source = self._closing_answer(agent)
+                    self.publish(
+                        "result", message=result, answer=answer, answer_source=source
+                    )
             self.state = "idle"
             self.publish("status", state="idle")
         except asyncio.CancelledError:
@@ -534,6 +547,24 @@ class Session:
             self.workspace.rmdir()
         except OSError:
             pass
+
+    def _closing_answer(self, agent: Any) -> tuple:
+        """What to show as the outcome of a run.
+
+        Some models do the work and call terminate without a word, leaving the
+        answer inside a tool's output - the user then sees a finished task and
+        no reply. Prefer the model's own closing words; fall back to the last
+        thing a tool printed, and say which one it is.
+        """
+        for message in reversed(getattr(agent.memory, "messages", [])):
+            if message.role == "user":
+                break
+            if message.role == "assistant" and (message.content or "").strip():
+                return message.content.strip(), "model"
+        spare = getattr(self, "last_output", None)
+        if spare and spare.get("text", "").strip():
+            return spare["text"].strip(), "tool"
+        return "", ""
 
     def forget(self, remove_files: bool = False) -> None:
         """Remove what was stored on disk for this session.

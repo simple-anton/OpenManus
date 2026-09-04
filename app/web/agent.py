@@ -6,7 +6,9 @@ it returned and whether it produced a screenshot - so the UI can mirror the
 agent's work the way the hosted Manus does.
 """
 
+import ast
 import json
+import re
 import time
 from functools import lru_cache
 from typing import Any, Dict, List, Optional
@@ -34,6 +36,27 @@ def _looks_failed(result: str) -> bool:
     """Tool errors come back wrapped in the observation text, not as exceptions."""
     head = result.lstrip()[:400]
     return head.startswith("Error") or "\nError:" in head or "Error: " in head
+
+
+def _readable(output: str) -> str:
+    """Tool output without the machinery around it.
+
+    A tool answers with `Observed output of cmd ... executed:` and then the
+    repr of a dict. Fine for the raw terminal panel, but this text may end up
+    standing in for the model's answer, and there it should read as what the
+    tool printed.
+    """
+    text = re.sub(r"^Observed output of cmd `[^`]+` executed:\s*", "", output.strip())
+    try:
+        parsed = ast.literal_eval(text)
+    except (ValueError, SyntaxError):
+        return text
+    if isinstance(parsed, dict):
+        for key in ("observation", "output", "result", "content"):
+            value = parsed.get(key)
+            if isinstance(value, str) and value.strip():
+                return value.strip()
+    return text
 
 
 def _plural(count: int, one: str, few: str, many: str) -> str:
@@ -123,6 +146,9 @@ class WebAgentMixin:
         started = time.monotonic()
         result = await super().execute_tool(command)
         failed = _looks_failed(result)
+        if not failed and name != "terminate" and result.strip():
+            # запасной итог: если модель завершит работу молча, показать это
+            self.session.last_output = {"name": name, "text": _readable(result)}
 
         self.session.publish(
             "tool_end",
