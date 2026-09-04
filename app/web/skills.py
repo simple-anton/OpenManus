@@ -609,13 +609,17 @@ async def _import_folder(
         if len(saved) >= MAX_BUNDLE_FILES:
             break
         relative = item["path"][len(root) :]
+        target = (folder / relative).resolve()
+        if folder.resolve() not in target.parents:
+            # a crafted tree path must never write outside the skill folder
+            logger.warning(f"Skipped {item['path']}: escapes the skill folder")
+            continue
         try:
             payload = await client.get(
                 f"{RAW_HOST}/{owner}/{repo}/{branch}/{item['path']}"
             )
             if payload.status_code != 200:
                 continue
-            target = folder / relative
             target.parent.mkdir(parents=True, exist_ok=True)
             target.write_bytes(payload.content)
             saved.append(relative)

@@ -3,14 +3,16 @@
 import asyncio
 import base64
 import json
+import os
 import uuid
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any, Dict, List, Optional
+from urllib.parse import urlsplit
 
 import httpx
 from fastapi import FastAPI, HTTPException, Request
-from fastapi.responses import FileResponse, StreamingResponse
+from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
@@ -33,6 +35,59 @@ MAX_UPLOAD_BYTES = 64 * 1024 * 1024
 
 # session_id -> Session
 SESSIONS: Dict[str, Session] = {}
+
+# The interface has no login: it trusts whoever can reach the port, which is
+# meant to be only the person at this machine (docker-compose binds it to
+# 127.0.0.1). But a web page the user visits can also reach 127.0.0.1 from
+# their browser, and this server can register MCP servers and API tools that
+# run commands - so an unguarded request from another site is remote code
+# execution. Two checks below keep that door shut:
+#   * the Host header must name this machine, which defeats DNS rebinding
+#     (an attacker's domain re-pointed at 127.0.0.1 still sends its own Host);
+#   * a request carrying a cross-origin Origin/Referer is refused, which
+#     defeats a form or fetch posted from another site.
+# A deployment that is genuinely reached under another name lists it in
+# OPENMANUS_ALLOWED_HOSTS (comma-separated host or host:port).
+_DEFAULT_HOSTS = {"localhost", "127.0.0.1", "::1", "[::1]", "0.0.0.0"}
+
+
+def _allowed_hosts() -> set:
+    extra = os.getenv("OPENMANUS_ALLOWED_HOSTS", "")
+    names = {item.strip().lower() for item in extra.split(",") if item.strip()}
+    return _DEFAULT_HOSTS | names
+
+
+def _hostname(value: str) -> str:
+    """The bare host of a Host header or an Origin URL, without the port."""
+    value = value.strip().lower()
+    if "://" in value:
+        value = urlsplit(value).netloc
+    # keep an IPv6 literal in its brackets; strip a trailing :port otherwise
+    if value.startswith("["):
+        return value.split("]")[0] + "]" if "]" in value else value
+    return value.rsplit(":", 1)[0] if ":" in value else value
+
+
+def _guard_request(request: Request) -> Optional[str]:
+    """Reason to refuse a browser request, or None when it is safe to serve."""
+    allowed = _allowed_hosts()
+    host = _hostname(request.headers.get("host", ""))
+    if host and host not in allowed and not _host_env_wildcard():
+        return f"Host «{host}» не разрешён"
+    # An Origin is present on cross-site requests and same-origin fetches alike;
+    # a Referer stands in for navigations that omit Origin. Either must match
+    # this host. Their absence (a top-level GET, curl, an SSE reconnect) is fine.
+    for header in ("origin", "referer"):
+        value = request.headers.get(header)
+        if value and value != "null":
+            if _hostname(value) not in allowed:
+                return f"Запрос пришёл со стороннего адреса ({header})"
+            break
+    return None
+
+
+def _host_env_wildcard() -> bool:
+    return os.getenv("OPENMANUS_ALLOWED_HOSTS", "").strip() == "*"
 
 
 class PromptRequest(BaseModel):
@@ -174,6 +229,18 @@ def create_app() -> FastAPI:
             logger.remove(sink_id)
 
     app = FastAPI(title="OpenManus Web", lifespan=lifespan)
+
+    @app.middleware("http")
+    async def guard(request: Request, call_next):
+        reason = _guard_request(request)
+        if reason is not None:
+            logger.warning(
+                f"Refused a request to {request.url.path}: {reason} "
+                f"(host={request.headers.get('host')}, "
+                f"origin={request.headers.get('origin')})"
+            )
+            return JSONResponse(status_code=403, content={"detail": reason})
+        return await call_next(request)
 
     # ------------------------------------------------------------------- pages
 

@@ -15,8 +15,11 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Run the OpenManus web interface")
     parser.add_argument(
         "--host",
-        default=os.getenv("OPENMANUS_HOST", "0.0.0.0"),
-        help="Interface to bind (default: 0.0.0.0)",
+        default=os.getenv("OPENMANUS_HOST", "127.0.0.1"),
+        help="Interface to bind (default: 127.0.0.1, i.e. this machine only). "
+        "docker-compose passes --host 0.0.0.0 so the container can be reached "
+        "on its published 127.0.0.1 port; only widen this behind a trusted "
+        "network, and set OPENMANUS_ALLOWED_HOSTS accordingly.",
     )
     parser.add_argument(
         "--port",
