@@ -36,10 +36,48 @@ def _looks_failed(result: str) -> bool:
     return head.startswith("Error") or "\nError:" in head or "Error: " in head
 
 
+def _plural(count: int, one: str, few: str, many: str) -> str:
+    """Русское согласование числа со словом: 1 действие, 2 действия, 5 действий."""
+    tens, ones = count % 100, count % 10
+    if 11 <= tens <= 14:
+        return many
+    if ones == 1:
+        return one
+    if 2 <= ones <= 4:
+        return few
+    return many
+
+
 class WebAgentMixin:
     """Reports every step of a ToolCallAgent to a web session."""
 
     session: Any = None
+
+    async def run(self, request: Optional[str] = None) -> str:
+        """Run as usual, but say out loud when the step limit cut the work off.
+
+        Upstream signals this by appending a line to the result, which is easy
+        to miss in a long transcript - and in plan mode the flow moves on to the
+        next step as if nothing happened, leaving the current one half done.
+        """
+        result = await super().run(request)
+        if "Reached max steps" in result:
+            per_step = getattr(self.session, "mode", "agent") == "flow"
+            self.session.publish(
+                "warning",
+                message=(
+                    f"Достигнут предел в {self.max_steps} "
+                    f"{_plural(self.max_steps, 'действие', 'действия', 'действий')} — "
+                    + (
+                        "текущий пункт плана прерван и мог остаться недоделанным."
+                        if per_step
+                        else "работа остановлена, задача могла остаться недоделанной."
+                    )
+                ),
+                advice="Поднимите «Максимум шагов» в Настройках → Текущая задача "
+                "или разбейте задачу на части.",
+            )
+        return result
 
     async def step(self) -> str:
         started = time.monotonic()

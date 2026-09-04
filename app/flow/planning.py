@@ -53,6 +53,10 @@ class PlanningFlow(BaseFlow):
     # Guidance the caller wants the plan itself to respect, e.g. the skills the
     # user attached to the task. The executors get it through their own prompts.
     planning_context: str = Field(default="")
+    # How many actions one plan step may take. Left unset, the executor keeps
+    # counting across the whole plan: the first steps eat the budget and the
+    # last ones are cut off. Set, every step starts with the same allowance.
+    step_budget: Optional[int] = Field(default=None)
 
     def __init__(
         self, agents: Union[BaseAgent, List[BaseAgent], Dict[str, BaseAgent]], **data
@@ -302,6 +306,9 @@ class PlanningFlow(BaseFlow):
         """
 
         # Use agent.run() to execute the step
+        if self.step_budget:
+            executor.current_step = 0
+            executor.max_steps = self.step_budget
         try:
             step_result = await executor.run(step_prompt)
 

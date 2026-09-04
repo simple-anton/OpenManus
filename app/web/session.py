@@ -15,7 +15,6 @@ from pathlib import Path
 from typing import Any, AsyncIterator, Dict, List, Optional, Set
 
 from app.config import config
-from app.flow.flow_factory import FlowFactory, FlowType
 from app.logger import logger
 from app.prompt.manus import SYSTEM_PROMPT
 from app.schema import Message
@@ -23,6 +22,7 @@ from app.tool.base import BaseTool
 from app.web import api_tools, diagnostics
 from app.web import skills as skills_store
 from app.web.agent import WebManus, create_data_analysis_agent
+from app.web.flow import WebPlanningFlow
 
 
 # how many events are replayed to a browser that (re)connects
@@ -90,6 +90,7 @@ class Session:
         self.agent: Optional[WebManus] = None
         self.task: Optional[asyncio.Task] = None
         self.state = "idle"
+        self.mode = "agent"  # what the current run was started as
         self.pending_question: Optional[str] = None
 
         self.history: List[Dict[str, Any]] = []
@@ -400,6 +401,7 @@ class Session:
         self.task = asyncio.create_task(self._run(prompt, mode))
 
     async def _run(self, prompt: str, mode: str) -> None:
+        self.mode = mode
         self.state = "running"
         self.publish("user", message=prompt, mode=mode)
         self.publish("status", state="running")
@@ -491,11 +493,13 @@ class Session:
                     "log", level="INFO", message="Подключён агент анализа данных"
                 )
 
-        # the planner writes the steps, so it has to know the skills as well
-        flow = FlowFactory.create_flow(
-            flow_type=FlowType.PLANNING,
-            agents=agents,
+        # the planner writes the steps, so it has to know the skills as well;
+        # max_steps is the allowance for one plan step, not for the whole plan
+        flow = WebPlanningFlow(
+            agents,
+            session=self,
             planning_context=skills_store.planning_prompt_for(self.skills),
+            step_budget=self.max_steps,
         )
         result = await asyncio.wait_for(flow.execute(prompt), timeout=FLOW_TIMEOUT)
         self.publish("result", message=result)

@@ -181,6 +181,17 @@
   .toolcard { border: 1px solid var(--line); border-radius: 9px; padding: 9px 11px; margin-bottom: 8px; }
   .toolcard b { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12.5px; }
   .clamped { display: -webkit-box; -webkit-line-clamp: 4; -webkit-box-orient: vertical; overflow: hidden; }
+  .planbox { border: 1px solid var(--line); border-radius: 12px; background: var(--panel); padding: 12px 14px; margin: 4px 0 10px; }
+  .planbox h4 { margin: 0 0 4px; font-size: 13.5px; }
+  .planbox .meta { color: var(--muted); font-size: 12px; margin-bottom: 8px; }
+  .planbox ol { margin: 0; padding: 0; list-style: none; counter-reset: plan; }
+  .planbox li { display: flex; gap: 8px; align-items: flex-start; padding: 4px 0; font-size: 13px; line-height: 1.45; }
+  .planbox li .mark { flex: none; width: 17px; text-align: center; color: var(--muted); }
+  .planbox li.done { color: var(--muted); }
+  .planbox li.done .mark { color: #1f6b3f; }
+  .planbox li.active { font-weight: 600; }
+  .planbox li.active .mark { color: var(--accent); }
+  .planbox li.blocked .mark { color: #8f2b2b; }
   .compat { flex: none; font-size: 11px; padding: 2px 8px; border-radius: 20px; }
   .compat.ok { background: #e4f3e8; color: #1f6b3f; }
   .compat.partial { background: #fbf0d2; color: #8a6212; }
@@ -894,6 +905,30 @@ async function showLogFiles() {
 
 /* ------------------------------------------------------------ events */
 let runStats = { step: 0, total: 0, seconds: 0, tokens: 0 };
+let planState = null, planCard = null;
+
+/* План живёт одной карточкой, которая обновляется на месте: иначе на каждый
+   пункт в ленту падал бы новый список. */
+function renderPlan() {
+  if (!planState) return;
+  const box = planCard || element("div", "planbox");
+  box.innerHTML = "";
+  box.appendChild(element("h4", null, planState.title || "План"));
+  const done = planState.steps.filter((s) => s.status === "done").length;
+  box.appendChild(element("div", "meta",
+    "Выполнено " + done + " из " + planState.steps.length +
+    (planState.budget ? " · на каждый пункт до " + planState.budget + " действий агента" : "")));
+  const list = document.createElement("ol");
+  planState.steps.forEach((step, index) => {
+    const item = element("li", step.status);
+    const mark = { done: "✓", active: "→", blocked: "!", waiting: "○" }[step.status] || "○";
+    item.appendChild(element("span", "mark", mark));
+    item.appendChild(element("span", null, step.text));
+    list.appendChild(item);
+  });
+  box.appendChild(list);
+  if (!planCard) { planCard = box; append(box); }
+}
 
 function plural(count, one, few, many) {
   const mod10 = count % 10, mod100 = count % 100;
@@ -909,11 +944,22 @@ function humanSize(bytes) {
 }
 
 function renderProgress() {
-  const parts = ["Шаг " + runStats.step + " / " + runStats.total];
+  const parts = [];
+  if (planState && planState.steps.length) {
+    const at = (planState.active === null || planState.active === undefined)
+      ? planState.steps.filter((s) => s.status === "done").length
+      : planState.active;
+    parts.push("Пункт " + Math.min(at + 1, planState.steps.length) + " / " + planState.steps.length);
+    parts.push("действие " + runStats.step + " / " + runStats.total);
+  } else {
+    parts.push("Шаг " + runStats.step + " / " + runStats.total);
+  }
   if (runStats.seconds >= 1) parts.push(Math.round(runStats.seconds) + " с");
   if (runStats.tokens) parts.push((runStats.tokens / 1000).toFixed(1) + "k токенов");
   $("progress").textContent = parts.join(" · ");
-  $("progress").title = "Сколько шагов сделано, сколько времени заняло и сколько токенов ушло в модель";
+  $("progress").title = planState
+    ? "Пункт плана и действие агента внутри него: у каждого пункта свой запас действий"
+    : "Сколько шагов сделано, сколько времени заняло и сколько токенов ушло в модель";
 }
 
 function setState(state) {
@@ -954,6 +1000,11 @@ function render(event) {
     case "step":
       runStats.step = event.index;
       runStats.total = event.total;
+      renderProgress();
+      break;
+    case "plan_state":
+      planState = { title: event.title, steps: event.steps || [], active: event.active, budget: event.budget };
+      renderPlan();
       renderProgress();
       break;
     case "step_end":
@@ -1073,6 +1124,7 @@ function connect(sessionId) {
   if (source) source.close();
   renderEmpty();
   steps = []; activeStep = -1; logs = []; exchanges = []; preview = null; timeline.innerHTML = "";
+  planState = null; planCard = null;
   runStats = { step: 0, total: 0, seconds: 0, tokens: 0 };
   $("progress").textContent = "";
   renderView();
@@ -1390,9 +1442,10 @@ function renderTaskSection(form) {
     return;
   }
   form.appendChild(buildField("task", {
-    key: "max_steps", label: "Максимум шагов", type: "number",
-    note: "Один шаг — это одно обращение к модели и один вызов инструмента. Предохранитель от бесконечного кружения: " +
-      "дойдя до предела, агент остановится. По умолчанию 20; для длинных задач можно поднять до 40–50.",
+    key: "max_steps", label: "Максимум действий агента", type: "number",
+    note: "Одно действие — это одно обращение к модели и один вызов инструмента. Предохранитель от бесконечного " +
+      "кружения: дойдя до предела, агент останавливается и сообщает об этом. В режимах «Агент» и «Чат» предел " +
+      "считается на всю задачу, в режиме «План» — на каждый пункт плана отдельно. По умолчанию 20.",
   }));
   const info = element("div", "field");
   info.appendChild(element("label", null, "Папка задачи"));
