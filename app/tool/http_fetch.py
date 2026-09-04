@@ -64,6 +64,22 @@ _ESCALATE = (
     "так и запишите, назвав оба способа."
 )
 
+# Щит от автоматики — отдельный случай. Ломиться в него бессмысленно и
+# незачем: это чужое решение о том, кого пускать. Одна попытка браузером
+# оправдана (иногда щит пропускает настоящий браузер), но готовиться надо к
+# отказу и сразу искать данные там, где их отдают добровольно.
+_SHIELD_PLAN = (
+    "\nЧТО ДЕЛАТЬ: одна попытка через browser_exec допустима —\n"
+    "    new_tab(\"{url}\"); wait_for_load(); print(js(\"document.body.innerText\"))\n"
+    "Но рассчитывайте на отказ и параллельно ищите замену. Щит не обходят "
+    "повторами, сменой заголовков или регистрацией — это решение владельца "
+    "сайта о том, кого пускать. Ищите те же сведения там, где их публикуют "
+    "сами: статистические органы, кадастр, регулятор, открытые данные, "
+    "выгрузки в XLSX/CSV. Данные о состоявшихся сделках обычно и точнее, "
+    "чем объявления с запрашиваемыми ценами. Если замены нет — запишите в "
+    "находки, что источник закрыт щитом, и что именно из-за этого неизвестно."
+)
+
 # теги, чей текст не имеет отношения к содержанию страницы
 NOISE = ("script", "style", "noscript", "template", "svg", "iframe")
 
@@ -279,7 +295,11 @@ class Fetch(BaseTool):
             hint = _blocked_hint(response.status_code, raw, content_type)
             if response.status_code in (401, 403, 429):
                 self._remember_blocked(landed)
-                hint += _ESCALATE.format(url=landed)
+                hint += (
+                    _SHIELD_PLAN.format(url=landed)
+                    if _shield_in(raw)
+                    else _ESCALATE.format(url=landed)
+                )
             return f"{head}\nСТРАНИЦА НЕ ОТДАНА.{hint}"
         if probe_only:
             return f"{head}\n(запрошена только проверка адреса)"
@@ -373,7 +393,16 @@ def _explain(error: httpx.HTTPError) -> str:
 
 def _blocked_hint(status: int, raw: bytes, content_type: str) -> str:
     if status in (401, 403):
-        # что делать дальше, скажет _ESCALATE — здесь только причина отказа
+        # Отказ отказу рознь, и реакция на них разная. Щит вроде Cloudflare
+        # срабатывает ДО всякого входа: личный кабинет тут не поможет, и
+        # браузер чаще всего тоже. Обычный же 403 бывает капризом заголовков,
+        # и браузер его нередко снимает. Агенту нужно знать, в каком он случае.
+        if _shield_in(raw):
+            return (
+                " Это щит от автоматики (Cloudflare или подобный), а НЕ требование "
+                "войти в личный кабинет: проверка срабатывает раньше формы входа, "
+                "поэтому учётная запись здесь ничего не даст."
+            )
         return " Доступ закрыт (403/401): нужен вход или сайт не пускает автоматику."
     if status == 404:
         return " Такой страницы нет. Не подбирайте адрес вручную — найдите ссылку поиском или в карте сайта."
@@ -415,6 +444,22 @@ def _looks_script_built(raw: bytes, body: str, content_type: str) -> bool:
     if len(raw) < MIN_HTML_BYTES:
         return False
     return len(body) < MIN_TEXT and len(body) < len(raw) * TEXT_SHARE
+
+
+SHIELD_MARKERS = (
+    b"just a moment",
+    b"challenge-error",
+    b"cf-chl",
+    b"cdn-cgi/challenge-platform",
+    b"performing security verification",
+    b"__cf_chl",
+)
+
+
+def _shield_in(raw: bytes) -> bool:
+    """Щит от автоматики узнаётся по телу ответа даже на коде 403."""
+    lowered = raw[:6000].lower()
+    return any(marker in lowered for marker in SHIELD_MARKERS)
 
 
 def _looks_blocked(body: str) -> Optional[str]:
