@@ -1,0 +1,33 @@
+# What Docker must not copy into the image.
+#
+# Everything listed here stays out of the build context, so changing it cannot
+# invalidate the cached layers. That matters most for the two folders the agent
+# writes to on every run - a finished task would otherwise force a full
+# reinstall of the dependencies on the next build.
+
+.git
+.github
+.vscode
+
+# written at run time and mounted from the host by docker-compose
+logs/
+workspace/
+
+# the settings, skills and caches are mounted from the host too. Only the
+# examples belong in the image, for a container started without those mounts -
+# and this keeps the api key out of the image as well.
+config/*
+!config/*.example*.toml
+!config/*.example*.json
+
+# leftovers from working on the project on the host machine
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.DS_Store
+# built on the host for the host's own system; the image installs its own
+node_modules/

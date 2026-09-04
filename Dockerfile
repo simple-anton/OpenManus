@@ -7,8 +7,12 @@ RUN apt-get update && apt-get install -y --no-install-recommends git curl nodejs
     && rm -rf /var/lib/apt/lists/* \
     && (command -v uv >/dev/null 2>&1 || pip install --no-cache-dir uv)
 
-COPY . .
-
+# The dependencies come before the source: this layer is rebuilt only when
+# requirements.txt itself changes, so editing the code no longer reinstalls
+# forty packages on every build.
+COPY requirements.txt .
 RUN uv pip install --system -r requirements.txt
+
+COPY . .
 
 CMD ["bash"]
