@@ -7,6 +7,7 @@ browser, search and sandbox options without a terminal.
 
 import json
 import shutil
+import time
 import tomllib
 from pathlib import Path
 from typing import Any, Dict, List
@@ -313,6 +314,38 @@ def list_logs(limit: int = 30) -> List[Dict[str, Any]]:
         }
         for path in files[:limit]
     ]
+
+
+# Every start of the interface opens a log file of its own and nothing ever
+# removes them, so they pile up for as long as the installation lives. Loguru's
+# own `retention` does not help: it runs on rotation, and a file named after the
+# start time never rotates. So the old ones are swept at start-up instead.
+LOG_MAX_AGE_DAYS = 14
+LOG_ALWAYS_KEEP = 20  # a rarely used installation keeps its history anyway
+
+
+def prune_logs(
+    max_age_days: int = LOG_MAX_AGE_DAYS, always_keep: int = LOG_ALWAYS_KEEP
+) -> List[str]:
+    """Delete log files older than the limit, keeping the newest few regardless."""
+    if not LOG_DIR.exists():
+        return []
+    files = sorted(LOG_DIR.glob("*.log"), key=lambda p: p.stat().st_mtime, reverse=True)
+    cutoff = time.time() - max_age_days * 86400
+    removed = []
+    for path in files[always_keep:]:
+        try:
+            if path.stat().st_mtime >= cutoff:
+                continue
+            path.unlink()
+            removed.append(path.name)
+        except OSError as exc:  # a locked or vanished file must not stop start-up
+            logger.warning(f"Could not remove the old log {path.name}: {exc}")
+    if removed:
+        logger.info(
+            f"Removed {len(removed)} log file(s) older than {max_age_days} days"
+        )
+    return removed
 
 
 def read_log(name: str, tail: int = 400) -> str:

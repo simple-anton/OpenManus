@@ -7,6 +7,7 @@ are written to disk so the interface survives a restart of the container.
 
 import asyncio
 import json
+import shutil
 import threading
 import time
 from collections import deque
@@ -510,14 +511,50 @@ class Session:
         except OSError:
             pass
 
-    def forget(self) -> None:
-        """Remove what was stored on disk for this session."""
+    def forget(self, remove_files: bool = False) -> None:
+        """Remove what was stored on disk for this session.
+
+        The task's own folder is kept by default: deleting a conversation
+        should not silently take the work with it. `remove_files` is the
+        deliberate choice made in the interface.
+        """
         for name in ("meta.json", "events.jsonl", "memory.json"):
             (self.store / name).unlink(missing_ok=True)
         try:
             self.store.rmdir()
         except OSError:
             pass
+        if remove_files:
+            self._remove_workspace()
+
+    def _remove_workspace(self) -> None:
+        """Delete this task's folder - and nothing that is not one."""
+        folder = Path(self.workspace).resolve()
+        expected = (WORKSPACE / f"task_{self.id}").resolve()
+        if folder != expected or not folder.is_dir():
+            # a session restored with an odd id, or a folder already gone
+            logger.warning(f"Refused to delete {folder}: not this task's folder")
+            return
+        try:
+            shutil.rmtree(folder)
+            logger.info(f"Removed the task folder {folder}")
+        except OSError as exc:
+            logger.warning(f"Could not remove {folder}: {exc}")
+
+    def workspace_usage(self) -> Dict[str, int]:
+        """How much the task folder holds, so the interface can say it out loud."""
+        files = 0
+        size = 0
+        folder = Path(self.workspace)
+        if folder.is_dir():
+            for path in folder.rglob("*"):
+                if path.is_file():
+                    files += 1
+                    try:
+                        size += path.stat().st_size
+                    except OSError:
+                        pass
+        return {"files": files, "bytes": size}
 
     def info(self) -> Dict[str, Any]:
         return {
@@ -530,5 +567,6 @@ class Session:
             "workspace": str(self.workspace),
             "max_steps": self.max_steps,
             "skills": self.skills,
+            "usage": self.workspace_usage(),
             "tools": self.tools(),
         }

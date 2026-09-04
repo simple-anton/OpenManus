@@ -218,6 +218,7 @@ def create_app() -> FastAPI:
             level="INFO",
             filter=lambda record: "web_session" in record["extra"],
         )
+        settings_store.prune_logs()
         SESSIONS.update(Session.restore_all())
         logger.info("OpenManus web interface ready")
         try:
@@ -294,12 +295,13 @@ def create_app() -> FastAPI:
         return session.info()
 
     @app.delete("/api/sessions/{session_id}")
-    async def delete_session(session_id: str) -> Dict[str, str]:
+    async def delete_session(session_id: str, files: bool = False) -> Dict[str, str]:
+        """Remove the task; `files=true` takes its folder with it."""
         session = _get_session(session_id)
         await session.cleanup()
-        session.forget()
+        session.forget(remove_files=files)
         SESSIONS.pop(session_id, None)
-        return {"status": "deleted"}
+        return {"status": "deleted", "files_removed": str(files).lower()}
 
     @app.post("/api/sessions/{session_id}/messages")
     async def send_message(session_id: str, request: PromptRequest) -> Dict[str, Any]:

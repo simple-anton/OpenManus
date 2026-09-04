@@ -211,6 +211,18 @@
 
   /* settings dialog */
   .overlay { position: fixed; inset: 0; background: rgba(30, 28, 25, .38); display: none; align-items: center; justify-content: center; z-index: 20; }
+  .ask { position: fixed; inset: 0; background: rgba(30,28,25,.38); display: flex; align-items: center;
+         justify-content: center; z-index: 40; }
+  .ask .box { background: var(--panel); border: 1px solid var(--line); border-radius: 13px; padding: 18px 20px;
+              width: 420px; max-width: 90vw; box-shadow: 0 14px 40px rgba(30,28,25,.22); }
+  .ask h4 { margin: 0 0 8px; font-size: 15px; }
+  .ask p { margin: 0 0 12px; color: var(--muted); font-size: 13px; line-height: 1.5; }
+  .ask label { display: flex; gap: 8px; align-items: flex-start; font-size: 13px; padding: 9px 10px;
+               border: 1px solid var(--line); border-radius: 9px; cursor: pointer; }
+  .ask label:hover { background: #f2efe9; }
+  .ask label small { display: block; color: var(--muted); font-size: 11.5px; line-height: 1.4; margin-top: 2px; }
+  .ask .row { display: flex; gap: 8px; justify-content: flex-end; margin-top: 14px; }
+  .ask .danger { background: #8f2b2b; border-color: #8f2b2b; color: #fff; }
   .overlay.open { display: flex; }
   #help-dialog { width: min(720px, 92vw); height: min(700px, 88vh); background: var(--panel); border-radius: 14px; display: flex; flex-direction: column; overflow: hidden; }
   #help-dialog > header { display: flex; align-items: center; padding: 14px 18px; border-bottom: 1px solid var(--line); }
@@ -890,6 +902,12 @@ function plural(count, one, few, many) {
   return count + " " + many;
 }
 
+function humanSize(bytes) {
+  if (!bytes) return "0 КБ";
+  if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + " КБ";
+  return (bytes / 1024 / 1024).toFixed(1) + " МБ";
+}
+
 function renderProgress() {
   const parts = ["Шаг " + runStats.step + " / " + runStats.total];
   if (runStats.seconds >= 1) parts.push(Math.round(runStats.seconds) + " с");
@@ -1094,14 +1112,68 @@ async function loadTasks() {
     kill.title = "Удалить задачу";
     kill.onclick = async (event) => {
       event.stopPropagation();
-      if (!confirm("Удалить задачу «" + info.title + "»? Файлы в её папке останутся.")) return;
-      await api("/api/sessions/" + info.id, { method: "DELETE" });
+      const choice = await askDeleteTask(info);
+      if (!choice) return;
+      await api("/api/sessions/" + info.id + (choice.files ? "?files=true" : ""), { method: "DELETE" });
       if (info.id === currentId) { currentId = null; renderEmpty(); $("title").textContent = "Нет активной задачи"; }
       await loadTasks();
     };
     row.appendChild(kill);
     row.onclick = (event) => { if (event.target === row) selectTask(info.id); };
     list.appendChild(row);
+  });
+}
+
+/* Удаление задачи: спрашиваем отдельно про файлы, потому что их обычно жаль,
+   а иногда наоборот — в них лежит то, чего не должно остаться на диске. */
+function askDeleteTask(info) {
+  return new Promise(async (resolve) => {
+    let usage = (info && info.usage) || { files: 0, bytes: 0 };
+    try {
+      usage = (await api("/api/sessions/" + info.id)).usage || usage;
+    } catch (error) { /* показываем то, что уже знаем */ }
+
+    const layer = element("div", "ask");
+    const box = element("div", "box");
+    box.appendChild(element("h4", null, "Удалить задачу «" + info.title + "»?"));
+    box.appendChild(element("p", null,
+      "Переписка и история шагов будут стёрты без возможности вернуть."));
+
+    const label = document.createElement("label");
+    const check = document.createElement("input");
+    check.type = "checkbox";
+    const text = element("span", null, usage.files
+      ? "Удалить и файлы задачи — " + plural(usage.files, "файл", "файла", "файлов") +
+        ", " + humanSize(usage.bytes)
+      : "Удалить и папку задачи (она пуста)");
+    text.appendChild(element("small", null, usage.files
+      ? "Всё, что агент создал или вы загрузили в этой задаче. Восстановить будет нельзя."
+      : "Файлов в ней нет, останется только пустая папка."));
+    label.append(check, text);
+    box.appendChild(label);
+
+    const row = element("div", "row");
+    const cancel = element("button", null, "Отмена");
+    const confirmButton = element("button", "danger", "Удалить");
+    row.append(cancel, confirmButton);
+    box.appendChild(row);
+    layer.appendChild(box);
+    document.body.appendChild(layer);
+    confirmButton.focus();
+
+    const close = (value) => {
+      document.removeEventListener("keydown", onKey);
+      layer.remove();
+      resolve(value);
+    };
+    const onKey = (event) => {
+      if (event.key === "Escape") close(null);
+      if (event.key === "Enter") close({ files: check.checked });
+    };
+    document.addEventListener("keydown", onKey);
+    cancel.onclick = () => close(null);
+    confirmButton.onclick = () => close({ files: check.checked });
+    layer.onclick = (event) => { if (event.target === layer) close(null); };
   });
 }
 
