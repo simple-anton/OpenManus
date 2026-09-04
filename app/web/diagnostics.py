@@ -19,6 +19,12 @@ from app.config import config
 from app.web import settings as settings_store
 
 
+# how long the health page waits: the server itself must answer quickly,
+# a local model that has to wake up and generate is given more room
+SERVER_PROBE_TIMEOUT = 8
+MODEL_PROBE_TIMEOUT = 30
+
+
 MAX_TECHNICAL_CHARS = 2500
 
 
@@ -301,8 +307,21 @@ async def health_checks() -> List[Dict[str, Any]]:
     # can we reach the model server, and does it know this model
     if llm:
         base = llm.base_url.rstrip("/")
+        headers = {"Authorization": f"Bearer {llm.api_key}"}
+        # Two questions, not one: is the server there at all, and does the model
+        # answer in time. A big local model busy with another request can take
+        # far longer than a probe should wait - that is not a broken setup, and
+        # calling it "no connection" sends the user chasing the wrong thing.
+        reachable = False
         try:
-            async with httpx.AsyncClient(timeout=10) as client:
+            async with httpx.AsyncClient(timeout=SERVER_PROBE_TIMEOUT) as client:
+                listing = await client.get(base + "/models", headers=headers)
+            reachable = listing.status_code < 500
+        except httpx.HTTPError:
+            reachable = False
+
+        try:
+            async with httpx.AsyncClient(timeout=MODEL_PROBE_TIMEOUT) as client:
                 response = await client.post(
                     base + "/chat/completions",
                     json={
@@ -310,7 +329,7 @@ async def health_checks() -> List[Dict[str, Any]]:
                         "messages": [{"role": "user", "content": "ping"}],
                         "max_tokens": 4,
                     },
-                    headers={"Authorization": f"Bearer {llm.api_key}"},
+                    headers=headers,
                 )
             if response.status_code == 200:
                 add("Ответ модели", True, "модель отвечает на пробный запрос")
@@ -321,6 +340,24 @@ async def health_checks() -> List[Dict[str, Any]]:
                     False,
                     f"HTTP {response.status_code}: {response.text[:160]}",
                     hint.get("advice", ""),
+                )
+        except httpx.TimeoutException:
+            if reachable:
+                add(
+                    "Ответ модели",
+                    None,
+                    f"сервер отвечает, но модель молчала дольше "
+                    f"{MODEL_PROBE_TIMEOUT} с",
+                    "Обычно это не поломка: большая модель либо занята вашей "
+                    "задачей, либо только загружается в память. Повторите "
+                    "проверку, когда агент закончит работу.",
+                )
+            else:
+                add(
+                    "Ответ модели",
+                    False,
+                    f"сервер не ответил за {MODEL_PROBE_TIMEOUT} с",
+                    "Проверьте, запущена ли Ollama и виден ли её адрес из контейнера.",
                 )
         except httpx.HTTPError as exc:
             add(

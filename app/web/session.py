@@ -36,6 +36,16 @@ FLOW_TIMEOUT = 3600
 # conversation turns carried over when a stored session is reopened
 MEMORY_KEPT = 40
 
+CHAT_PROMPT = (
+    "Ты отвечаешь в режиме обычного разговора. У тебя нет инструментов: ты не "
+    "запускаешь код, не открываешь сайты, не ищешь в интернете, не читаешь и не "
+    "создаёшь файлы. Отвечай текстом, на языке собеседника.\n"
+    "Если вопрос требует свежих данных из сети, работы с файлами или запуска "
+    "кода — скажи об этом прямо и предложи переключиться на режим «Агент» "
+    "кнопкой сверху: там всё это доступно. Не пиши код, изображающий действие, "
+    "которого ты не совершал."
+)
+
 WORKSPACE = Path(config.workspace_root)
 STORE = WORKSPACE / ".sessions"
 
@@ -437,12 +447,22 @@ class Session:
             self._start_queued()
 
     async def _chat(self, prompt: str) -> None:
-        """Answer directly, without the tool loop - Manus's chat mode."""
+        """Answer directly, without the tool loop - Manus's chat mode.
+
+        The system prompt has to be its own: handed Manus's, the model believes
+        it has a browser and a python runtime, and answers a question about the
+        weather by writing code that nobody runs. Here it is told plainly that
+        it has no tools, and what to say when the question needs them.
+        """
         agent = await self.ensure_agent()
         agent.update_memory("user", prompt)
         answer = await agent.llm.ask(
             messages=agent.messages,
-            system_msgs=[Message.system_message(agent.system_prompt)],
+            system_msgs=[
+                Message.system_message(
+                    CHAT_PROMPT + skills_store.prompt_for(self.skills)
+                )
+            ],
             stream=False,
         )
         agent.memory.add_message(Message.assistant_message(answer))
