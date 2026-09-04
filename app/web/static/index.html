@@ -233,6 +233,24 @@
 
   /* settings dialog */
   .overlay { position: fixed; inset: 0; background: rgba(30, 28, 25, .38); display: none; align-items: center; justify-content: center; z-index: 20; }
+  /* Окно входа на сайт: живой вид на браузер контейнера плюс два решения. */
+  .signin { position: fixed; inset: 0; background: rgba(30,28,25,.55); z-index: 60;
+    display: flex; align-items: center; justify-content: center; padding: 18px; }
+  .signin .box { background: var(--panel); border: 1px solid var(--line); border-radius: 13px;
+    width: min(1180px, 100%); max-height: 100%; display: flex; flex-direction: column; overflow: hidden; }
+  .signin header { padding: 14px 18px 10px; border-bottom: 1px solid var(--line); }
+  .signin h4 { margin: 0 0 6px; font-size: 15px; }
+  .signin .why { color: var(--muted); font-size: 13px; line-height: 1.5; }
+  .signin .site { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px;
+    background: #f4f1ea; border: 1px solid var(--line); border-radius: 7px;
+    padding: 4px 8px; display: inline-block; margin-top: 8px; word-break: break-all; }
+  .signin .screen { flex: 1; min-height: 340px; background: #16150f; position: relative; }
+  .signin .screen iframe { width: 100%; height: 100%; border: 0; display: block; }
+  .signin .noscreen { color: #ded9cc; font-size: 13px; padding: 26px; line-height: 1.6; }
+  .signin footer { padding: 12px 18px; border-top: 1px solid var(--line);
+    display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+  .signin .hint { color: var(--muted); font-size: 12px; flex: 1; min-width: 220px; line-height: 1.45; }
+
   .ask { position: fixed; inset: 0; background: rgba(30,28,25,.38); display: flex; align-items: center;
          justify-content: center; z-index: 40; }
   .ask .box { background: var(--panel); border: 1px solid var(--line); border-radius: 13px; padding: 18px 20px;
@@ -1160,6 +1178,16 @@ function render(event) {
     case "warning":
       append(warningCard(event));
       break;
+    case "login_request":
+      openSignIn(event);
+      break;
+    case "login_decision":
+      closeSignIn();
+      append(card("note", "Вход на сайт",
+        event.decision === "done"
+          ? "Вы вошли — агент продолжает работу под вашей учётной записью."
+          : "Источник пропущен. Агент запишет, каких данных из-за этого не хватает."));
+      break;
     case "llm":
       exchanges.push(event.exchange);
       if (exchanges.length > 40) exchanges.shift();
@@ -1269,6 +1297,73 @@ async function loadTasks() {
 
 /* Удаление задачи: спрашиваем отдельно про файлы, потому что их обычно жаль,
    а иногда наоборот — в них лежит то, чего не должно остаться на диске. */
+// ── Вход на сайт под учётной записью человека ─────────────────────────────
+// Агент упёрся в закрытый источник и просит войти. Показываем живой вид на
+// браузер, который работает внутри контейнера: человек входит там своими
+// руками, пароль никуда не передаётся и агенту не виден.
+let signInLayer = null;
+
+function closeSignIn() {
+  if (signInLayer) { signInLayer.remove(); signInLayer = null; }
+}
+
+async function decideSignIn(decision, buttons) {
+  buttons.forEach((b) => { b.disabled = true; });
+  try {
+    await api(`/api/sessions/${currentId}/login`, {
+      method: "POST", body: JSON.stringify({ decision }),
+    });
+    closeSignIn();
+  } catch (error) {
+    buttons.forEach((b) => { b.disabled = false; });
+    alert("Не получилось передать решение агенту: " + error.message);
+  }
+}
+
+function openSignIn(event) {
+  closeSignIn();
+  const layer = element("div", "signin");
+  const box = element("div", "box");
+
+  const head = document.createElement("header");
+  head.appendChild(element("h4", null, "Агент просит вас войти на сайт"));
+  head.appendChild(element("div", "why", event.reason || ""));
+  head.appendChild(element("div", "site", event.url || ""));
+  box.appendChild(head);
+
+  const screen = element("div", "screen");
+  if (event.view) {
+    const frame = document.createElement("iframe");
+    frame.src = event.view;
+    // окно смотрит на браузер внутри контейнера, посторонним скриптам там нечего делать
+    frame.setAttribute("sandbox", "allow-scripts allow-same-origin allow-forms");
+    screen.appendChild(frame);
+  } else {
+    screen.appendChild(element("div", "noscreen",
+      "Живой вид на браузер недоступен. Проверьте, что образ пересобран и в " +
+      "docker-compose.yml проброшен порт 6080."));
+  }
+  box.appendChild(screen);
+
+  const foot = document.createElement("footer");
+  const done = element("button", "primary", "Я вошёл — продолжай");
+  const skip = element("button", null, "Пропустить источник");
+  const buttons = [done, skip];
+  done.onclick = () => decideSignIn("done", buttons);
+  skip.onclick = () => decideSignIn("skip", buttons);
+  foot.appendChild(done);
+  foot.appendChild(skip);
+  foot.appendChild(element("div", "hint",
+    "Войдите в окне выше — это настоящий браузер агента. Пароль никуда не " +
+    "передаётся и агенту не виден: он узнает только, что вы закончили. " +
+    "Вход сохранится до кнопки «Забыть все входы» в Настройках."));
+  box.appendChild(foot);
+
+  layer.appendChild(box);
+  document.body.appendChild(layer);
+  signInLayer = layer;
+}
+
 function askDeleteTask(info) {
   return new Promise(async (resolve) => {
     let usage = (info && info.usage) || { files: 0, bytes: 0 };
@@ -1327,7 +1422,7 @@ const SECTIONS = [
   { id: "vision", label: "Модель зрения", note:
     "Отдельная модель, которая умеет смотреть на картинки. Нужна, чтобы агент понимал снимки страниц из браузера. Если такой модели нет — оставьте пустым, остальное будет работать." },
   { id: "browser", label: "Браузер", note:
-    "Как агент работает с браузером. Менять стоит, только если браузерные задачи ведут себя не так, как хочется." },
+    "Как агент работает с браузером. Менять стоит, только если браузерные задачи ведут себя не так, как хочется. Здесь же — кнопка стереть все входы, которые вы делали руками по просьбе агента." },
   { id: "search", label: "Поиск", note:
     "Каким поисковиком пользоваться, когда агент ищет информацию. Если задачи упираются в «вы не робот» и агент не находит источники — заведите бесплатный ключ и выберите Tavily или Brave." },
   { id: "sandbox", label: "Песочница", note:
@@ -1526,6 +1621,36 @@ function renderDialog() {
   form.appendChild(element("div", "section-title", section.label));
   if (section.note) form.appendChild(element("div", "section-note", section.note));
   (FIELDS[dialogSection] || []).forEach((spec) => form.appendChild(buildField(dialogSection, spec)));
+  if (dialogSection === "browser") appendForgetLogins(form);
+}
+
+// Входы, сделанные вами руками по просьбе агента, живут в профиле браузера
+// внутри контейнера и переживают перезапуск. Это удобно и это же — ключи от
+// ваших кабинетов на диске, поэтому кнопка стереть их должна быть на виду.
+function appendForgetLogins(form) {
+  const wrap = element("div", "field");
+  wrap.appendChild(element("label", null, "Входы на сайтах"));
+  const control = element("div", "control");
+  const button = element("button", null, "Забыть все входы");
+  button.onclick = async () => {
+    if (!confirm("Стереть все входы на сайтах?\n\nАгент потеряет доступ ко " +
+                 "всему, куда вы входили по его просьбе. Понадобится — войдёте заново.")) return;
+    button.disabled = true;
+    const was = button.textContent;
+    try {
+      const result = await api("/api/browser/forget-logins", { method: "POST" });
+      button.textContent = result.removed ? "Входы стёрты" : "Стирать было нечего";
+    } catch (error) {
+      button.textContent = "Не получилось: " + error.message;
+    }
+    setTimeout(() => { button.textContent = was; button.disabled = false; }, 2500);
+  };
+  control.appendChild(button);
+  control.appendChild(element("div", "note",
+    "Стирает cookies и открытые сессии в браузере агента. Настройки и кэш остаются. " +
+    "Делайте это, когда закончили работу с личными кабинетами."));
+  wrap.appendChild(control);
+  form.appendChild(wrap);
 }
 
 function renderTaskSection(form) {

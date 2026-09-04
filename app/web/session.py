@@ -24,6 +24,14 @@ from app.web import api_tools, diagnostics
 from app.web import skills as skills_store
 from app.web.agent import WebManus, create_data_analysis_agent
 from app.web.flow import WebPlanningFlow
+from app.web.login_gate import (
+    DECISION_DONE,
+    DECISION_SKIP,
+    RequestLogin,
+    browser_alive,
+    open_in_browser,
+    view_url,
+)
 
 
 # how many events are replayed to a browser that (re)connects
@@ -32,6 +40,9 @@ MAX_HISTORY = 2000
 MAX_IMAGES_KEPT = 15
 # how long the agent waits for a human answer before giving up
 ANSWER_TIMEOUT = 900
+# вход руками занимает больше: найти пароль, получить код из СМС, пройти
+# двухфакторную проверку. Полчаса — разумный запас.
+LOGIN_TIMEOUT = 1800
 # a planning flow may run for a while, but not forever
 FLOW_TIMEOUT = 3600
 # conversation turns carried over when a stored session is reopened
@@ -106,6 +117,9 @@ class Session:
         self._image_events: deque = deque()
         self._subscribers: Set[asyncio.Queue] = set()
         self._answers: asyncio.Queue = asyncio.Queue()
+        # решение человека по просьбе войти на сайт: done или skip
+        self._logins: asyncio.Queue = asyncio.Queue()
+        self.pending_login: Optional[Dict[str, str]] = None
         self._queued: deque = deque()
         self._event_id = 0
         self._agent_lock = asyncio.Lock()
@@ -320,10 +334,12 @@ class Session:
     def _attach_web_tools(self, agent: WebManus) -> None:
         """Browser-based ask_human, plus the endpoints defined in the UI."""
         web_ask = WebAskHuman(session=self)
+        login = RequestLogin(session=self)
+        replacements = {web_ask.name: web_ask, login.name: login}
         tools = tuple(
-            web_ask if tool.name == web_ask.name else tool
-            for tool in agent.available_tools.tools
+            replacements.pop(tool.name, tool) for tool in agent.available_tools.tools
         )
+        tools = tools + tuple(replacements.values())
         custom = tuple(
             tool
             for tool in api_tools.build_tools()
@@ -385,6 +401,70 @@ class Session:
         finally:
             self.pending_question = None
         return answer
+
+    async def request_login(self, url: str, reason: str) -> str:
+        """Агент просит человека войти на сайт. Работа ждёт решения."""
+        while not self._logins.empty():  # снимаем решения от прошлой просьбы
+            self._logins.get_nowait()
+
+        if not await browser_alive():
+            self.publish(
+                "warning",
+                message="Агент попросил войти на сайт, но браузер в контейнере не работает.",
+                advice="Пересоберите образ и проверьте «Логи» — там строка, "
+                "начинающаяся с «browser:».",
+            )
+            return (
+                "The container browser is not running, so a sign-in is impossible. "
+                "Record this source as unavailable and continue without it."
+            )
+
+        opened = await open_in_browser(url)
+        self.pending_login = {"url": url, "reason": reason}
+        self.publish(
+            "login_request",
+            url=url,
+            reason=reason,
+            view=view_url(),
+            opened=opened,
+        )
+        try:
+            decision = await asyncio.wait_for(
+                self._logins.get(), timeout=LOGIN_TIMEOUT
+            )
+        except asyncio.TimeoutError:
+            self.publish(
+                "log",
+                level="WARNING",
+                message="Никто не ответил на просьбу войти — источник пропущен.",
+            )
+            return (
+                "Nobody answered the sign-in request in time. Record this source "
+                "as unavailable, say so plainly in your findings, and continue."
+            )
+        finally:
+            self.pending_login = None
+
+        if decision == DECISION_DONE:
+            return (
+                f"The person signed in. The browser now holds their session for "
+                f"{url}. Open the page again with browser_exec and read the data. "
+                "Take only what this task needs, and never change anything in "
+                "their account."
+            )
+        return (
+            "The person declined to sign in to this source. Do not ask again for "
+            "this site. Record in your findings that the data behind it is "
+            "missing and what exactly is unknown because of it, then continue."
+        )
+
+    def login_decision(self, decision: str) -> bool:
+        """Ответ человека на просьбу войти: он вошёл или пропускает источник."""
+        if self.pending_login is None or decision not in (DECISION_DONE, DECISION_SKIP):
+            return False
+        self.publish("login_decision", decision=decision)
+        self._logins.put_nowait(decision)
+        return True
 
     def answer(self, text: str) -> bool:
         if self.pending_question is None:

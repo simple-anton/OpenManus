@@ -18,6 +18,9 @@ CHROME_PORT="${CHROME_CDP_PORT:-9222}"
 CHROME_LANG="${CHROME_LANG:-en-US,en,ru}"
 SCREEN="${CHROME_SCREEN:-1920x1080x24}"
 DISPLAY_NUM="${CHROME_DISPLAY:-:99}"
+VNC_PORT="${VNC_PORT:-5900}"
+VIEW_PORT="${BROWSER_VIEW_PORT:-6080}"
+NOVNC_DIR="${NOVNC_DIR:-/usr/share/novnc}"
 
 # Обычный (не headless) режим на виртуальном экране Xvfb. Headless-браузер
 # отличается от настоящего десятком признаков, и защита сайтов узнаёт его
@@ -103,7 +106,41 @@ start_browser() {
     echo "browser: Chromium не отозвался за 10 с — смотрите /tmp/chromium.log"
 }
 
+start_live_view() {
+    # Живой вид на экран браузера: человек через него входит на закрытые
+    # сайты своими руками. Без виртуального экрана показывать нечего, а без
+    # x11vnc/websockify — нечем; в обоих случаях просто молчим, интерфейс
+    # честно скажет в окне входа, что вида нет.
+    [ -n "${DISPLAY:-}" ] || return 0
+    command -v x11vnc >/dev/null 2>&1 || return 0
+    command -v websockify >/dev/null 2>&1 || return 0
+
+    # -localhost: наружу порт отдаёт только docker-compose, и только на
+    # 127.0.0.1. -nopw без этого означал бы открытый доступ к вашим сессиям.
+    x11vnc -display "$DISPLAY" -forever -shared -nopw -localhost -quiet \
+        -rfbport "$VNC_PORT" > /tmp/x11vnc.log 2>&1 &
+
+    for _ in $(seq 1 20); do
+        if curl -fs -o /dev/null --max-time 1 "http://127.0.0.1:$VNC_PORT" 2>/dev/null \
+           || nc -z 127.0.0.1 "$VNC_PORT" 2>/dev/null; then break; fi
+        sleep 0.25
+    done
+
+    websockify --web "$NOVNC_DIR" "$VIEW_PORT" "127.0.0.1:$VNC_PORT" \
+        > /tmp/websockify.log 2>&1 &
+
+    for _ in $(seq 1 20); do
+        if curl -fs -o /dev/null --max-time 1 "http://127.0.0.1:$VIEW_PORT/vnc.html"; then
+            echo "browser: живой вид доступен на порту $VIEW_PORT"
+            return 0
+        fi
+        sleep 0.25
+    done
+    echo "browser: живой вид не поднялся — смотрите /tmp/websockify.log"
+}
+
 # Ошибка внутри запуска браузера не должна помешать старту приложения.
 start_browser || echo "browser: запуск браузера не удался, продолжаю без него"
+start_live_view || echo "browser: живой вид не запустился, вход руками будет недоступен"
 
 exec "$@"

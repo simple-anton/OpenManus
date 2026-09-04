@@ -7,10 +7,18 @@ services:
     ports:
       # bound to localhost only: the agent runs code, so do not expose it to the LAN
       - "127.0.0.1:8000:8000"
+      # живой вид на браузер контейнера — окно, в котором вы входите на сайты.
+      # Тоже только localhost: за этим окном лежат ваши открытые сессии.
+      - "127.0.0.1:6080:6080"
     volumes:
       - ./config:/app/OpenManus/config
       - ./workspace:/app/OpenManus/workspace
       - ./logs:/app/OpenManus/logs
+      # Профиль браузера в отдельном томе: входы, сделанные вами руками,
+      # переживают перезапуск и пересборку. Иначе входить пришлось бы заново
+      # после каждого обновления. Стереть — кнопкой «Забыть все входы» в
+      # Настройках или командой: docker volume rm openmanus_browser-profile
+      - browser-profile:/root/.config/chromium
     environment:
       # Браузер идёт обычным режимом на виртуальном экране, а не headless:
       # headless узнают по десятку признаков и чаще показывают ему проверку
@@ -25,3 +33,6 @@ services:
       - "host.docker.internal:host-gateway"
     stdin_open: true
     tty: true
+
+volumes:
+  browser-profile:

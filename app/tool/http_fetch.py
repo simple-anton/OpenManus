@@ -80,6 +80,18 @@ _SHIELD_PLAN = (
     "находки, что источник закрыт щитом, и что именно из-за этого неизвестно."
 )
 
+# Дверь с замком — третий случай, отличный и от щита, и от каприза заголовков.
+# Здесь у человека за интерфейсом доступ, скорее всего, есть, и он может им
+# поделиться, не отдавая пароль.
+_LOGIN_PLAN = (
+    "\nПОХОЖЕ НА ТРЕБОВАНИЕ ВОЙТИ. Если эти данные важны для задачи и у "
+    "человека, вероятно, есть сюда доступ (банк, платная подписка, кабинет "
+    "регулятора) — вызовите request_login с этим адресом и объясните, какие "
+    "сведения нужны. Работа встанет на паузу, человек войдёт своими руками, "
+    "после чего откройте страницу заново через browser_exec. Если источник "
+    "второстепенный — не отвлекайте человека, запишите пробел и идите дальше."
+)
+
 # теги, чей текст не имеет отношения к содержанию страницы
 NOISE = ("script", "style", "noscript", "template", "svg", "iframe")
 
@@ -295,11 +307,12 @@ class Fetch(BaseTool):
             hint = _blocked_hint(response.status_code, raw, content_type)
             if response.status_code in (401, 403, 429):
                 self._remember_blocked(landed)
-                hint += (
-                    _SHIELD_PLAN.format(url=landed)
-                    if _shield_in(raw)
-                    else _ESCALATE.format(url=landed)
-                )
+                if _shield_in(raw):
+                    hint += _SHIELD_PLAN.format(url=landed)
+                elif response.status_code == 401:
+                    hint += _LOGIN_PLAN
+                else:
+                    hint += _ESCALATE.format(url=landed)
             return f"{head}\nСТРАНИЦА НЕ ОТДАНА.{hint}"
         if probe_only:
             return f"{head}\n(запрошена только проверка адреса)"
@@ -317,6 +330,10 @@ class Fetch(BaseTool):
         # а не длину содержимого, и любая страница выглядит пустой.
         blocked = _looks_blocked(body)
         script_built = _looks_script_built(raw, body, content_type)
+        # Стена входа обычно отвечает кодом 200: сервер честно отдал страницу,
+        # просто это форма входа, а не данные. Ни щитом, ни пустым каркасом
+        # такое не поймать — нужен отдельный разбор.
+        login_wall = looks_like_login(landed, body, response.status_code)
 
         if len(body) > max_chars:
             body = body[:max_chars] + f"\n\n[…обрезано, всего {len(body)} символов]"
@@ -328,6 +345,9 @@ class Fetch(BaseTool):
                 f"\nПОХОЖЕ НА ЗАЩИТУ ОТ БОТОВ ({blocked}) — прямым запросом "
                 "этот источник не взять." + _ESCALATE.format(url=landed)
             )
+        elif login_wall:
+            self._remember_blocked(landed)
+            head += _LOGIN_PLAN
         elif script_built:
             self._remember_blocked(landed)
             head += (
@@ -389,6 +409,33 @@ def _explain(error: httpx.HTTPError) -> str:
     if isinstance(error, httpx.TimeoutException):
         return "сервер не ответил за отведённое время"
     return f"{type(error).__name__}: {text}"
+
+
+# Как выглядит стена входа. Держим правило узким: лучше не заметить дверь,
+# чем принять за дверь обычную страницу с формой подписки в подвале.
+_FORM = ('type="password"', "type='password'", 'name="password"')
+_WORDS = (
+    "sign in", "log in", "login", "войти", "вход", "авторизац",
+    "մուտք",  # армянский «вход» — целевой рынок этого пользователя
+)
+_PATHS = ("/login", "/signin", "/sign-in", "/auth", "/account/login", "/user/login")
+
+
+def looks_like_login(final_url: str, body: str, status: int) -> bool:
+    """Похоже ли, что нас развернули на форму входа.
+
+    Требуем два признака сразу: поле пароля и слово о входе рядом. Одного
+    поля мало — форма входа в подвале есть у половины сайтов, и принимать
+    каждую такую страницу за стену значило бы дёргать человека впустую.
+    """
+    if status == 401:
+        return True
+    lowered = body[:20_000].lower()
+    has_field = any(marker in lowered for marker in _FORM)
+    has_word = any(word in lowered for word in _WORDS)
+    path = urlparse(final_url).path.lower()
+    redirected = any(path.startswith(p) or path == p.strip("/") for p in _PATHS)
+    return (has_field and has_word and redirected) or (has_field and redirected)
 
 
 def _blocked_hint(status: int, raw: bytes, content_type: str) -> str:

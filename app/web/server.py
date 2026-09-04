@@ -23,6 +23,7 @@ from app.web import api_tools as api_tools_store
 from app.web import diagnostics
 from app.web import presets as presets_store
 from app.web import settings as settings_store
+from app.web import browser_profile
 from app.web import skills as skills_store
 from app.web import store as store_catalogue
 from app.web.session import Session
@@ -97,6 +98,11 @@ class PromptRequest(BaseModel):
 
 class AnswerRequest(BaseModel):
     answer: str
+
+
+class LoginDecisionRequest(BaseModel):
+    # done — человек вошёл, skip — источник пропускаем
+    decision: str
 
 
 class SessionPatch(BaseModel):
@@ -319,6 +325,24 @@ def create_app() -> FastAPI:
         if not session.answer(request.answer):
             raise HTTPException(status_code=409, detail="No question is pending")
         return session.info()
+
+    @app.post("/api/sessions/{session_id}/login")
+    async def login_decision(
+        session_id: str, request: LoginDecisionRequest
+    ) -> Dict[str, Any]:
+        """Человек либо вошёл на сайт руками, либо пропускает этот источник."""
+        session = _get_session(session_id)
+        if not session.login_decision(request.decision):
+            raise HTTPException(
+                status_code=409, detail="Просьба войти сейчас не ожидается"
+            )
+        return session.info()
+
+    @app.post("/api/browser/forget-logins")
+    async def forget_logins() -> Dict[str, Any]:
+        """Стирает профиль браузера: все открытые сессии на сайтах исчезают."""
+        removed = await browser_profile.forget()
+        return {"removed": removed}
 
     @app.post("/api/sessions/{session_id}/stop")
     async def stop(session_id: str) -> Dict[str, Any]:

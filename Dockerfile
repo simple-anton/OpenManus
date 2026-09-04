@@ -8,8 +8,12 @@ WORKDIR /app/OpenManus
 # системные библиотеки, которые нужны этой сборке.
 # xvfb + x11-utils: виртуальный экран, чтобы браузер шёл обычным режимом, а не
 # headless — headless узнаётся защитой сайтов с первого запроса
+# x11vnc + novnc + websockify: живой вид на браузер контейнера. Нужен, чтобы
+# человек мог сам войти на закрытый сайт прямо из интерфейса — пароль при
+# этом остаётся у него и агенту не виден.
 RUN apt-get update && apt-get install -y --no-install-recommends \
         git curl nodejs npm chromium xvfb x11-utils fonts-liberation fonts-dejavu-core \
+        x11vnc novnc websockify \
     && rm -rf /var/lib/apt/lists/* \
     && (command -v uv >/dev/null 2>&1 || pip install --no-cache-dir uv)
 
