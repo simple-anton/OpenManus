@@ -181,6 +181,11 @@
   .toolcard { border: 1px solid var(--line); border-radius: 9px; padding: 9px 11px; margin-bottom: 8px; }
   .toolcard b { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12.5px; }
   .clamped { display: -webkit-box; -webkit-line-clamp: 4; -webkit-box-orient: vertical; overflow: hidden; }
+  .tablewrap { overflow-x: auto; margin: 10px 0; }
+  .agent .body table { border-collapse: collapse; font-size: 12.5px; min-width: 100%; }
+  .agent .body th, .agent .body td { border: 1px solid var(--line); padding: 6px 10px; text-align: left; vertical-align: top; }
+  .agent .body th { background: #f2efe9; font-weight: 600; white-space: nowrap; }
+  .agent .body tbody tr:nth-child(even) { background: #faf9f6; }
   .planbox { border: 1px solid var(--line); border-radius: 12px; background: var(--panel); padding: 12px 14px; margin: 4px 0 10px; }
   .planbox h4 { margin: 0 0 4px; font-size: 13.5px; }
   .planbox .meta { color: var(--muted); font-size: 12px; margin-bottom: 8px; }
@@ -514,6 +519,59 @@ function escapeHtml(text) {
   return text.replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 }
 
+/* Таблицы в формате markdown: строка заголовка, строка-разделитель из дефисов,
+   дальше строки данных. Модель отдаёт их постоянно, а без разбора они падали в
+   ленту сырыми палками. Двоеточия в разделителе задают выравнивание. */
+function tables(html) {
+  const lines = html.split("\n");
+  const out = [];
+  let index = 0;
+
+  const cells = (line) => {
+    let row = line.trim();
+    if (row.startsWith("|")) row = row.slice(1);
+    if (row.endsWith("|")) row = row.slice(0, -1);
+    return row.split("|").map((cell) => cell.trim());
+  };
+
+  while (index < lines.length) {
+    const head = lines[index];
+    const rule = lines[index + 1];
+    const looksLikeRow = head && head.includes("|");
+    const looksLikeRule = rule && /^[\s|:-]*-[\s|:-]*$/.test(rule) && rule.includes("|");
+    if (!looksLikeRow || !looksLikeRule || cells(head).length < 2) {
+      out.push(head);
+      index += 1;
+      continue;
+    }
+
+    const align = cells(rule).map((mark) => {
+      const left = mark.startsWith(":"), right = mark.endsWith(":");
+      if (left && right) return " style=\"text-align:center\"";
+      if (right) return " style=\"text-align:right\"";
+      return "";
+    });
+    const columns = cells(head);
+    let table = "<div class=\"tablewrap\"><table><thead><tr>" +
+      columns.map((cell, i) => "<th" + (align[i] || "") + ">" + cell + "</th>").join("") +
+      "</tr></thead><tbody>";
+
+    index += 2;
+    let rows = 0;
+    while (index < lines.length && lines[index].includes("|") && lines[index].trim()) {
+      const values = cells(lines[index]);
+      table += "<tr>" + columns.map((_, i) =>
+        "<td" + (align[i] || "") + ">" + (values[i] === undefined ? "" : values[i]) + "</td>").join("") + "</tr>";
+      index += 1;
+      rows += 1;
+    }
+    table += "</tbody></table></div>";
+    // строка заголовка без единой строки данных — это не таблица, а текст
+    out.push(rows ? "\n" + table + "\n" : head + "\n" + rule);
+  }
+  return out.join("\n");
+}
+
 function markdown(text) {
   const blocks = [];
   let html = escapeHtml(text).replace(/```(\w*)\n?([\s\S]*?)```/g, (match, lang, code) => {
@@ -527,6 +585,7 @@ function markdown(text) {
     .replace(/^#\s+(.+)$/gm, "<h1>$1</h1>")
     .replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>")
     .replace(/\[([^\]]+)\]\((https?:\/\/[^)\s]+)\)/g, '<a href="$2" target="_blank" rel="noopener">$1</a>');
+  html = tables(html);
   html = html.replace(/(?:^[-*]\s+.+\n?)+/gm, (match) => {
     const items = match.trim().split("\n").map((line) => "<li>" + line.replace(/^[-*]\s+/, "") + "</li>").join("");
     return "<ul>" + items + "</ul>";
@@ -536,7 +595,7 @@ function markdown(text) {
     if (!trimmed) return "";
     const block = trimmed.match(/^@@BLOCK(\d+)@@$/);
     if (block) return blocks[Number(block[1])];
-    if (/^<(h\d|ul|ol|pre)/.test(trimmed)) return trimmed;
+    if (/^<(h\d|ul|ol|pre|div|table)/.test(trimmed)) return trimmed;
     return "<p>" + trimmed.replace(/\n/g, "<br />") + "</p>";
   }).join("");
   return html.replace(/@@BLOCK(\d+)@@/g, (match, index) => blocks[Number(index)]);
