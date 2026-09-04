@@ -7,6 +7,7 @@ from pydantic import Field
 
 from app.agent.base import BaseAgent
 from app.flow.base import BaseFlow
+from app.flow.compaction import forget_previous_step
 from app.flow.ledger import Ledger, digest, outcome_of
 from app.llm import LLM
 from app.logger import logger
@@ -319,11 +320,16 @@ class PlanningFlow(BaseFlow):
         {plan_status}
 {self._carried_context()}
         YOUR CURRENT TASK:
-        You are now working on step {self.current_step_index}: "{step_text}"
+        You are now working on step {self.current_step_index + 1}: "{step_text}"
 
         Please only execute this current step using the appropriate tools.
 {self._step_rules()}
         """
+
+        # Разговор предыдущего пункта плана в новый не переносим: всё нужное
+        # уже в журнале находок и в сводке выше, а сырые выдачи инструментов
+        # раздували вход каждого шага до 146 тысяч токенов.
+        forget_previous_step(executor)
 
         # Use agent.run() to execute the step
         if self.step_budget:
@@ -355,7 +361,7 @@ class PlanningFlow(BaseFlow):
         """Кладёт итог шага и в память потока, и в файл журнала."""
         self.step_records.append(
             {
-                "index": self.current_step_index,
+                "index": self.current_step_index + 1,
                 "text": step_text,
                 "summary": summary,
                 "status": status,
@@ -363,7 +369,8 @@ class PlanningFlow(BaseFlow):
         )
         ledger = self._ledger()
         if ledger:
-            ledger.append(self.current_step_index, step_text, summary)
+            # в журнале шаги нумеруем с единицы, как их видит человек в плане
+            ledger.append(self.current_step_index + 1, step_text, summary)
 
     def _carried_context(self) -> str:
         """Всё, что предыдущие шаги узнали, — в постановку задачи текущему."""

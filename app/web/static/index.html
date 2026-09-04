@@ -201,6 +201,8 @@
   .planbox li.active { font-weight: 600; }
   .planbox li.active .mark { color: var(--accent); }
   .planbox li.blocked .mark { color: #8f2b2b; }
+  /* «частично» — шаг закрыт, но часть данных он не добыл и сам это признал */
+  .planbox li.partial .mark { color: #9a6b12; }
   .compat { flex: none; font-size: 11px; padding: 2px 8px; border-radius: 20px; }
   .compat.ok { background: #e4f3e8; color: #1f6b3f; }
   .compat.partial { background: #fbf0d2; color: #8a6212; }
@@ -995,7 +997,7 @@ function renderPlan() {
   const list = document.createElement("ol");
   planState.steps.forEach((step, index) => {
     const item = element("li", step.status);
-    const mark = { done: "✓", active: "→", blocked: "!", waiting: "○" }[step.status] || "○";
+    const mark = { done: "✓", active: "→", blocked: "!", partial: "±", waiting: "○" }[step.status] || "○";
     item.appendChild(element("span", "mark", mark));
     item.appendChild(element("span", null, step.text));
     list.appendChild(item);

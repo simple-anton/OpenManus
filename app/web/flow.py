@@ -44,9 +44,21 @@ class WebPlanningFlow(PlanningFlow):
             return None
         steps: List[Dict[str, str]] = []
         statuses = plan.get("step_statuses", [])
+        # Шаг, который сам признался «сделано частично», в плане всё равно
+        # помечается completed: другого статуса у планировщика нет. Но человеку
+        # разница важна — иначе отчёт, собранный по наполовину закрытым пунктам,
+        # выглядит полностью зелёным. Берём признание шага из своих записей.
+        partial = {
+            record["index"] - 1
+            for record in self.step_records
+            if record.get("status") == "partial"
+        }
         for index, text in enumerate(plan.get("steps", [])):
             status = statuses[index] if index < len(statuses) else "not_started"
-            steps.append({"text": str(text), "status": MARKS.get(status, "waiting")})
+            mark = MARKS.get(status, "waiting")
+            if mark == "done" and index in partial:
+                mark = "partial"
+            steps.append({"text": str(text), "status": mark})
         return {
             "title": plan.get("title", ""),
             "steps": steps,

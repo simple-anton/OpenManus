@@ -5,6 +5,7 @@ from typing import Any, List, Optional, Union
 from pydantic import Field
 
 from app.agent.react import ReActAgent
+from app.flow.compaction import squash_old_observations
 from app.exceptions import TokenLimitExceeded
 from app.logger import logger
 from app.prompt.toolcall import NEXT_STEP_PROMPT, SYSTEM_PROMPT
@@ -67,6 +68,9 @@ class ToolCallAgent(ReActAgent):
 
     async def think(self) -> bool:
         """Process current state and decide next actions using tools"""
+        # Старые ответы инструментов внутри длинного шага сворачиваем: они уже
+        # отработаны, а возить их с собой в каждом запросе дорого.
+        squash_old_observations(self)
         if self.next_step_prompt:
             user_msg = Message.user_message(self.next_step_prompt)
             self.messages += [user_msg]
