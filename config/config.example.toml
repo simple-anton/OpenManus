@@ -3,7 +3,11 @@
 model = "claude-3-7-sonnet-20250219"       # The LLM model to use
 base_url = "https://api.anthropic.com/v1/" # API endpoint URL
 api_key = "YOUR_API_KEY"                   # Your API key
-max_tokens = 8192                          # Maximum number of tokens in the response
+# Length of a single model reply. When a reply hits this ceiling it gets cut
+# off mid-sentence and carries no tool call, so the agent's step is wasted.
+# Research and reporting tasks need room: 16000-32000 on a cloud model.
+# Local models often cap lower - if the provider rejects the value, lower it.
+max_tokens = 16384
 temperature = 0.0                          # Controls randomness
 
 # [llm] # Amazon Bedrock

@@ -269,13 +269,24 @@ class Fetch(BaseTool):
             logger.warning(f"fetch: не разобрал {landed}: {error}")
             body = f"[содержимое не разобрано: {error}]"
 
+        # Признаки страницы считаем ДО обрезки: иначе меряем длину среза,
+        # а не длину содержимого, и любая страница выглядит пустой.
+        blocked = _looks_blocked(body)
+        script_built = _looks_script_built(raw, body, content_type)
+
         if len(body) > max_chars:
             body = body[:max_chars] + f"\n\n[…обрезано, всего {len(body)} символов]"
         if saved:
             head += f"\nсохранено в файл: {saved}"
-        blocked = _looks_blocked(body)
         if blocked:
             head += f"\nПОХОЖЕ НА ЗАЩИТУ ОТ БОТОВ ({blocked}) — этот источник так не взять."
+        elif script_built:
+            head += (
+                "\nТЕКСТА ПОЧТИ НЕТ: страница весит много, а читаемого текста "
+                "мало — обычно это значит, что содержимое рисуют скрипты. "
+                "Ниже, скорее всего, только меню. За данными идите сюда "
+                "через browser_exec."
+            )
         return f"{head}\n\n{body}"
 
     def _save_if_binary(self, url: str, content_type: str, raw: bytes) -> Optional[str]:
@@ -349,6 +360,28 @@ BOT_WALL = (
     ("are you a robot", "капча"),
     ("enable javascript and cookies", "антибот"),
 )
+
+
+# Пороги подобраны по замерам на живых страницах, а не на глаз:
+#   страница ЦБА, где таблицу рисует скрипт — 3.0% текста, 1543 знака
+#   короткая новость pan.am                  — 6.7% текста, 3524 знака
+#   новость Caucasus Watch                   — 11.4% текста, 5212 знаков
+#   большой гид по налогам                   — 14.2% текста, 16645 знаков
+# По одной доле новость от пустого каркаса не отличить: 3% и 6.7% слишком
+# близко. Разделяет абсолютная длина: полторы тысячи знаков — это меню и
+# подвал, и ничего больше. Поэтому требуем оба признака сразу.
+TEXT_SHARE = 0.05
+MIN_TEXT = 2_500
+MIN_HTML_BYTES = 15_000
+
+
+def _looks_script_built(raw: bytes, body: str, content_type: str) -> bool:
+    """Страница отдалась, но данных в ней нет — их дорисует браузер."""
+    if "html" not in content_type:
+        return False
+    if len(raw) < MIN_HTML_BYTES:
+        return False
+    return len(body) < MIN_TEXT and len(body) < len(raw) * TEXT_SHARE
 
 
 def _looks_blocked(body: str) -> Optional[str]:
