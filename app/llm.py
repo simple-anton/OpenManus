@@ -200,6 +200,8 @@ class LLM:
             # Add token counting related attributes
             self.total_input_tokens = 0
             self.total_completion_tokens = 0
+            # Причина остановки последней генерации, см. ask_tool
+            self.last_finish_reason = None
             self.max_input_tokens = (
                 llm_config.max_input_tokens
                 if hasattr(llm_config, "max_input_tokens")
@@ -743,6 +745,12 @@ class LLM:
             self.update_token_count(
                 response.usage.prompt_tokens, response.usage.completion_tokens
             )
+
+            # Почему модель перестала писать. "length" означает, что ответ
+            # обрезали на лимите max_tokens: вызова инструмента в нём может не
+            # оказаться вовсе, и шаг агента уходит впустую. Агент читает это
+            # поле, чтобы отличить обрыв от осознанного молчания.
+            self.last_finish_reason = response.choices[0].finish_reason
 
             return response.choices[0].message
 

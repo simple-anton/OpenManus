@@ -7,6 +7,7 @@ from pydantic import Field
 
 from app.agent.base import BaseAgent
 from app.flow.base import BaseFlow
+from app.flow.ledger import Ledger, digest, outcome_of
 from app.llm import LLM
 from app.logger import logger
 from app.schema import AgentState, Message, ToolChoice
@@ -57,6 +58,10 @@ class PlanningFlow(BaseFlow):
     # counting across the whole plan: the first steps eat the budget and the
     # last ones are cut off. Set, every step starts with the same allowance.
     step_budget: Optional[int] = Field(default=None)
+    # Папка задачи: там лежит журнал находок, общая память шагов.
+    workspace: Optional[str] = Field(default=None)
+    # Что каждый шаг о себе сообщил — идёт в постановку задачи следующему.
+    step_records: List[dict] = Field(default_factory=list)
 
     def __init__(
         self, agents: Union[BaseAgent, List[BaseAgent], Dict[str, BaseAgent]], **data
@@ -148,6 +153,21 @@ class PlanningFlow(BaseFlow):
             "You are a planning assistant. Create a concise, actionable plan with clear steps. "
             "Focus on key milestones rather than detailed sub-steps. "
             "Optimize for clarity and efficiency."
+            "\n\nHOW THE PLAN WILL BE RUN — plan for these constraints, they are real:\n"
+            "* Every step is executed by a FRESH agent with a LIMITED number of "
+            "actions. A step that needs a dozen different sources will run out "
+            "of actions and deliver nothing. Split broad research across steps.\n"
+            "* Steps do not share a conversation. They share only files in the "
+            "working directory and a findings journal. So each step must end "
+            "with something written down, and later steps must be phrased as "
+            "working from those written findings.\n"
+            "* Put a step that gathers data BEFORE the step that analyses it, "
+            "and make the analysis step read files rather than re-fetch the web.\n"
+            "* Reserve the final step for assembling the deliverable from the "
+            "findings journal. That step must not depend on fetching anything "
+            "new — by then some sources may have become unreachable.\n"
+            "* 6 to 10 steps is the useful range. Fewer means each step is too "
+            "broad to finish; more means the budget is spread too thin."
         )
         agents_description = []
         for key in self.executor_keys:
@@ -294,15 +314,15 @@ class PlanningFlow(BaseFlow):
         plan_status = await self._get_plan_text()
         step_text = step_info.get("text", f"Step {self.current_step_index}")
 
-        # Create a prompt for the agent to execute the current step
         step_prompt = f"""
         CURRENT PLAN STATUS:
         {plan_status}
-
+{self._carried_context()}
         YOUR CURRENT TASK:
         You are now working on step {self.current_step_index}: "{step_text}"
 
-        Please only execute this current step using the appropriate tools. When you're done, provide a summary of what you accomplished.
+        Please only execute this current step using the appropriate tools.
+{self._step_rules()}
         """
 
         # Use agent.run() to execute the step
@@ -311,30 +331,95 @@ class PlanningFlow(BaseFlow):
             executor.max_steps = self.step_budget
         try:
             step_result = await executor.run(step_prompt)
-
-            # Mark the step as completed after successful execution
-            await self._mark_step_completed()
-
-            return step_result
         except Exception as e:
             logger.error(f"Error executing step {self.current_step_index}: {e}")
+            self._record(step_text, f"Шаг прерван ошибкой: {e}", "blocked")
+            await self._mark_step_completed(PlanStepStatus.BLOCKED.value)
             return f"Error executing step {self.current_step_index}: {str(e)}"
 
-    async def _mark_step_completed(self) -> None:
-        """Mark the current step as completed."""
+        # Шаг сам сообщает, чем кончился. Раньше любой шаг помечался как
+        # выполненный — даже тот, чьи действия целиком упёрлись в капчу.
+        status = outcome_of(step_result)
+        self._record(step_text, step_result, status)
+        await self._mark_step_completed(
+            PlanStepStatus.BLOCKED.value
+            if status == "blocked"
+            else PlanStepStatus.COMPLETED.value
+        )
+        return step_result
+
+    def _ledger(self) -> Optional[Ledger]:
+        return Ledger(self.workspace) if self.workspace else None
+
+    def _record(self, step_text: str, summary: str, status: str) -> None:
+        """Кладёт итог шага и в память потока, и в файл журнала."""
+        self.step_records.append(
+            {
+                "index": self.current_step_index,
+                "text": step_text,
+                "summary": summary,
+                "status": status,
+            }
+        )
+        ledger = self._ledger()
+        if ledger:
+            ledger.append(self.current_step_index, step_text, summary)
+
+    def _carried_context(self) -> str:
+        """Всё, что предыдущие шаги узнали, — в постановку задачи текущему."""
+        parts = []
+        recent = digest(self.step_records)
+        if recent:
+            parts.append(f"\n        ЧТО УЖЕ СДЕЛАНО НА ПРЕДЫДУЩИХ ШАГАХ:\n{recent}\n")
+        ledger = self._ledger()
+        if ledger:
+            body = ledger.read()
+            if body:
+                parts.append(
+                    f"\n        ЖУРНАЛ НАХОДОК (файл {ledger.path}):\n{body}\n"
+                )
+        return "".join(parts)
+
+    def _step_rules(self) -> str:
+        ledger = self._ledger()
+        where = str(ledger.path) if ledger else "findings.md в рабочей папке"
+        return f"""
+        BEFORE YOU FINISH THIS STEP — these two rules are mandatory:
+
+        1. RECORD WHAT YOU FOUND. Your conversation for this step is thrown away
+           afterwards; later steps see ONLY what you write down. Append every
+           number, rate, price, date and conclusion you obtained to {where}
+           (use str_replace_editor), each with its source URL and the date the
+           source was published. A figure without a source is unusable in the
+           final report and will have to be found again.
+
+        2. REPORT THE OUTCOME HONESTLY. End your summary with exactly one line:
+               STEP RESULT: done      — you got what the step asked for
+               STEP RESULT: partial   — you got part of it; say which part is missing
+               STEP RESULT: blocked   — you got nothing usable; say why
+           Do not claim "done" when sources were unreachable, blocked by a
+           captcha, or when you fell back on figures you remembered rather than
+           read. A step honestly marked blocked is far more useful than a step
+           falsely marked done: the final report will say the data is missing
+           instead of inventing it.
+        """
+
+    async def _mark_step_completed(
+        self, step_status: str = PlanStepStatus.COMPLETED.value
+    ) -> None:
+        """Записать исход шага в план — выполнен он или упёрся."""
         if self.current_step_index is None:
             return
 
         try:
-            # Mark the step as completed
             await self.planning_tool.execute(
                 command="mark_step",
                 plan_id=self.active_plan_id,
                 step_index=self.current_step_index,
-                step_status=PlanStepStatus.COMPLETED.value,
+                step_status=step_status,
             )
             logger.info(
-                f"Marked step {self.current_step_index} as completed in plan {self.active_plan_id}"
+                f"Marked step {self.current_step_index} as {step_status} in plan {self.active_plan_id}"
             )
         except Exception as e:
             logger.warning(f"Failed to update plan status: {e}")
@@ -348,7 +433,7 @@ class PlanningFlow(BaseFlow):
                     step_statuses.append(PlanStepStatus.NOT_STARTED.value)
 
                 # Update the status
-                step_statuses[self.current_step_index] = PlanStepStatus.COMPLETED.value
+                step_statuses[self.current_step_index] = step_status
                 plan_data["step_statuses"] = step_statuses
 
     async def _get_plan_text(self) -> str:

@@ -11,6 +11,15 @@ services:
       - ./config:/app/OpenManus/config
       - ./workspace:/app/OpenManus/workspace
       - ./logs:/app/OpenManus/logs
+    environment:
+      # Браузер идёт обычным режимом на виртуальном экране, а не headless:
+      # headless узнают по десятку признаков и чаще показывают ему проверку
+      # «вы не робот». Поставьте 0, если браузерные задачи начнут вести себя
+      # странно — тогда вернётся headless.
+      BROWSER_HEADFUL: "1"
+    # Chromium держит вкладки в разделяемой памяти; стандартных 64 МБ ему мало,
+    # и вкладки падают на тяжёлых страницах
+    shm_size: "512m"
     extra_hosts:
       # lets the container reach a local Ollama / LM Studio running on the host
       - "host.docker.internal:host-gateway"

@@ -79,8 +79,16 @@ temperature = 0.0                          # Controls randomness for vision mode
 
 # Optional configuration, Search settings.
 # [search]
-# Search engine for agent to use. Default is "Google", can be set to "Baidu" or "DuckDuckGo" or "Bing".
-#engine = "Google"
+# Search engine for agent to use.
+# With a key: "Tavily", "Brave", "Serper" - these use real search APIs and are
+# not stopped by anti-bot pages. Without a key: "Google", "DuckDuckGo", "Bing",
+# "Baidu" - these scrape the ordinary search pages and are regularly served a
+# captcha instead of results.
+#engine = "Tavily"
+# Key for Tavily / Brave / Serper. Free tiers: tavily.com (1000 searches a
+# month), brave.com/search/api (2000 a month), serper.dev (2500 one-off).
+# Engines that need a key are skipped when it is empty.
+#api_key = ""
 # Fallback engine order. Default is ["DuckDuckGo", "Baidu", "Bing"] - will try in this order after primary engine fails.
 #fallback_engines = ["DuckDuckGo", "Baidu", "Bing"]
 # Seconds to wait before retrying all engines again when they all fail due to rate limits. Default is 60.

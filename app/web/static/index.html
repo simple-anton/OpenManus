@@ -496,6 +496,7 @@ const ICONS = {
   python_execute: "\u{1F40D}", str_replace_editor: "\u{1F4DD}", ask_human: "\u{1F4AC}",
   terminate: "\u{1F3C1}", web_search: "\u{1F50E}", browser_exec: "\u{1F310}",
   browser_screenshot: "\u{1F4F8}", bash: "\u{2328}", planning: "\u{1F5C2}",
+  fetch: "\u{2B07}",
 };
 const icon = (name) => ICONS[name] || (name.startsWith("browser") ? "\u{1F310}" : "\u{1F527}");
 
@@ -1326,7 +1327,7 @@ const SECTIONS = [
   { id: "browser", label: "Браузер", note:
     "Как агент работает с браузером. Менять стоит, только если браузерные задачи ведут себя не так, как хочется." },
   { id: "search", label: "Поиск", note:
-    "Каким поисковиком пользоваться, когда агент ищет информацию, и на каком языке ожидать результаты." },
+    "Каким поисковиком пользоваться, когда агент ищет информацию. Если задачи упираются в «вы не робот» и агент не находит источники — заведите бесплатный ключ и выберите Tavily или Brave." },
   { id: "sandbox", label: "Песочница", note:
     "Запускать ли код агента в отдельном контейнере. Безопаснее, но требует доступа к Docker изнутри контейнера. По умолчанию выключено — код выполняется прямо в контейнере OpenManus." },
   { id: "runflow", label: "Планировщик", note:
@@ -1389,10 +1390,13 @@ const FIELDS = {
       "Аргументы запуска браузера через запятую, например --lang=ru. Нужно редко." },
   ],
   search: [
-    { key: "engine", label: "Поисковик", type: "select", options: ["Google", "DuckDuckGo", "Baidu", "Bing"], note:
-      "Основной поисковик. DuckDuckGo обычно стабильнее прочих без ключей и капчи." },
+    { key: "engine", label: "Поисковик", type: "select",
+      options: ["Tavily", "Brave", "Serper", "Google", "DuckDuckGo", "Baidu", "Bing"], note:
+      "Tavily, Brave и Serper работают по ключу и не упираются в капчу — с ними поиск действительно работает. Google, DuckDuckGo, Bing и Baidu ходят на обычные поисковые страницы под видом человека, и те регулярно отвечают проверкой «вы не робот»: поиск встаёт, а задача остаётся без данных." },
+    { key: "api_key", label: "Ключ поиска", type: "text", note:
+      "Нужен для Tavily, Brave и Serper. Бесплатные тарифы: tavily.com — 1000 запросов в месяц, brave.com/search/api — 2000 в месяц, serper.dev — 2500 разово. Заведите ключ на любом из трёх, вставьте сюда и выберите этот поисковик выше. Без ключа эти три пропускаются." },
     { key: "fallback_engines", label: "Запасные", type: "list", note:
-      "Через запятую. Если основной не ответил, агент попробует их по очереди. Например: DuckDuckGo, Bing." },
+      "Через запятую. Если основной не ответил, агент попробует их по очереди. Например: Brave, DuckDuckGo, Bing." },
     { key: "lang", label: "Язык", type: "text", note: "Код языка результатов: ru, en. Влияет на то, какие страницы найдутся." },
     { key: "country", label: "Страна", type: "text", note: "Код региона: ru, us. Тоже влияет на выдачу." },
     { key: "retry_delay", label: "Пауза перед повтором, с", type: "number", note:

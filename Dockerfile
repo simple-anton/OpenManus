@@ -6,7 +6,10 @@ WORKDIR /app/OpenManus
 # chromium: плагин «Браузер» подключается к нему по протоколу отладки.
 # Ставим пакет Debian, а не playwright install: он тянет за собой ровно те
 # системные библиотеки, которые нужны этой сборке.
-RUN apt-get update && apt-get install -y --no-install-recommends git curl nodejs npm chromium \
+# xvfb + x11-utils: виртуальный экран, чтобы браузер шёл обычным режимом, а не
+# headless — headless узнаётся защитой сайтов с первого запроса
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        git curl nodejs npm chromium xvfb x11-utils fonts-liberation fonts-dejavu-core \
     && rm -rf /var/lib/apt/lists/* \
     && (command -v uv >/dev/null 2>&1 || pip install --no-cache-dir uv)
 

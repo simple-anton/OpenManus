@@ -36,6 +36,35 @@ class ToolCallAgent(ReActAgent):
     max_steps: int = 30
     max_observe: Optional[Union[int, bool]] = None
 
+    # сколько раз подряд прощаем обрыв, прежде чем признать шаг потраченным
+    max_truncation_retries: int = 2
+    truncation_retries: int = 0
+
+    def _handle_truncation(self, content: str) -> bool:
+        """Ответ модели оборвался на лимите длины и не содержит вызова инструмента."""
+        self.truncation_retries += 1
+        logger.warning(
+            f"Ответ модели обрезан лимитом длины без вызова инструмента "
+            f"(попытка {self.truncation_retries}/{self.max_truncation_retries})"
+        )
+        if content:
+            # сохраняем то, что успело написаться: там может быть полезное
+            self.memory.add_message(Message.assistant_message(content))
+        self.memory.add_message(
+            Message.user_message(
+                "Твой прошлый ответ оборвался: он упёрся в предел длины "
+                "сообщения и не содержал вызова инструмента, поэтому ничего "
+                "не произошло. Не пиши длинный текст в сообщение. Если нужно "
+                "составить документ или отчёт — сохрани его в файл через "
+                "str_replace_editor. Сейчас сделай один короткий вызов "
+                "инструмента."
+            )
+        )
+        if self.truncation_retries <= self.max_truncation_retries:
+            # шаг не засчитываем: цикл в BaseAgent.run увеличивает счётчик сам
+            self.current_step = max(0, self.current_step - 1)
+        return True
+
     async def think(self) -> bool:
         """Process current state and decide next actions using tools"""
         if self.next_step_prompt:
@@ -76,6 +105,16 @@ class ToolCallAgent(ReActAgent):
             response.tool_calls if response and response.tool_calls else []
         )
         content = response.content if response and response.content else ""
+
+        # Ответ, обрезанный на лимите max_tokens, приходит без вызова
+        # инструмента: шаг тратится, а работа не двигается. В разобранном логе
+        # так сгорело четыре шага подряд по 8192 токена. Объясняем модели, что
+        # произошло, и не засчитываем шаг — иначе она повторит то же самое.
+        if getattr(self.llm, "last_finish_reason", None) == "length" and not tool_calls:
+            return self._handle_truncation(content)
+        if tool_calls:
+            # шаг удался — снова прощаем обрывы с чистого листа
+            self.truncation_retries = 0
 
         # Log response info
         logger.info(f"✨ {self.name}'s thoughts: {content}")

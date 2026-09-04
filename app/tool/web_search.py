@@ -12,10 +12,14 @@ from app.tool.base import BaseTool, ToolResult
 from app.tool.search import (
     BaiduSearchEngine,
     BingSearchEngine,
+    BraveSearchEngine,
     DuckDuckGoSearchEngine,
     GoogleSearchEngine,
+    SerperSearchEngine,
+    TavilySearchEngine,
     WebSearchEngine,
 )
+from app.tool.search.api_search import ApiSearchEngine
 from app.tool.search.base import SearchItem
 
 
@@ -190,7 +194,12 @@ class WebSearch(BaseTool):
         },
         "required": ["query"],
     }
+    # Движки с ключом идут первыми: они единственные, кого не останавливает
+    # антибот. Ключ подставляется в _get_engine_order из конфигурации.
     _search_engine: dict[str, WebSearchEngine] = {
+        "tavily": TavilySearchEngine(),
+        "brave": BraveSearchEngine(),
+        "serper": SerperSearchEngine(),
         "google": GoogleSearchEngine(),
         "baidu": BaiduSearchEngine(),
         "duckduckgo": DuckDuckGoSearchEngine(),
@@ -382,7 +391,35 @@ class WebSearch(BaseTool):
         )
         engine_order.extend([e for e in self._search_engine if e not in engine_order])
 
-        return engine_order
+        return self._usable(engine_order)
+
+    def _usable(self, engine_order: List[str]) -> List[str]:
+        """Раздаёт ключ движкам с API и убирает те, кому его не досталось.
+
+        Пробовать движок без ключа бессмысленно: он гарантированно откажет, а
+        каждая такая попытка — это ещё одна запись «поиск не удался» в логе и
+        задержка перед следующим движком.
+        """
+        api_key = (
+            getattr(config.search_config, "api_key", "") if config.search_config else ""
+        ) or ""
+        api_key = api_key.strip()
+        usable = []
+        for name in engine_order:
+            engine = self._search_engine[name]
+            if isinstance(engine, ApiSearchEngine):
+                if not api_key:
+                    continue
+                engine.api_key = api_key
+            usable.append(name)
+        if not usable:
+            # ключа нет вовсе — остаются только скрейперы, пусть попробуют
+            usable = [
+                name
+                for name in engine_order
+                if not isinstance(self._search_engine[name], ApiSearchEngine)
+            ]
+        return usable
 
     @retry(
         stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=1, max=10)

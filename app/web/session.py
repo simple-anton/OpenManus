@@ -300,6 +300,12 @@ class Session:
         """Point the agent at this task's folder and its attached skills."""
         if self.agent is None:
             return
+        # Инструменты, умеющие писать файлы, должны писать в папку задачи, а
+        # не в общий workspace: иначе скачанное не видно во вкладке «Файлы» и
+        # не удаляется вместе с задачей.
+        for tool in self.agent.available_tools.tools:
+            if "directory" in type(tool).model_fields:
+                tool.directory = str(self.workspace)
         self.agent.system_prompt = (
             SYSTEM_PROMPT.format(directory=self.workspace)
             + ANSWER_PROMPT
@@ -514,6 +520,8 @@ class Session:
             session=self,
             planning_context=skills_store.planning_prompt_for(self.skills),
             step_budget=self.max_steps,
+            # журнал находок ложится в папку задачи: это общая память шагов
+            workspace=str(self.workspace),
         )
         result = await asyncio.wait_for(flow.execute(prompt), timeout=FLOW_TIMEOUT)
         self.publish("result", message=result)

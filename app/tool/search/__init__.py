@@ -1,3 +1,8 @@
+from app.tool.search.api_search import (
+    BraveSearchEngine,
+    SerperSearchEngine,
+    TavilySearchEngine,
+)
 from app.tool.search.baidu_search import BaiduSearchEngine
 from app.tool.search.base import WebSearchEngine
 from app.tool.search.bing_search import BingSearchEngine
@@ -11,4 +16,7 @@ __all__ = [
     "DuckDuckGoSearchEngine",
     "GoogleSearchEngine",
     "BingSearchEngine",
+    "TavilySearchEngine",
+    "BraveSearchEngine",
+    "SerperSearchEngine",
 ]

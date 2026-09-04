@@ -10,9 +10,11 @@ from app.prompt.manus import NEXT_STEP_PROMPT, SYSTEM_PROMPT
 from app.schema import Message
 from app.tool import Terminate, ToolCollection
 from app.tool.ask_human import AskHuman
+from app.tool.http_fetch import Fetch
 from app.tool.mcp import MCPClients, MCPClientTool
 from app.tool.python_execute import PythonExecute
 from app.tool.str_replace_editor import StrReplaceEditor
+from app.tool.web_search import WebSearch
 
 
 _BROWSER_USE_SERVER_ID = "browser_use"
@@ -57,6 +59,11 @@ class Manus(ToolCallAgent):
     available_tools: ToolCollection = Field(
         default_factory=lambda: ToolCollection(
             PythonExecute(),
+            # Поиск и прямая загрузка страниц. Без них единственным окном
+            # наружу остаётся браузер: один адрес — один шаг агента, и любой
+            # антибот останавливает работу целиком.
+            WebSearch(),
+            Fetch(),
             StrReplaceEditor(),
             AskHuman(),
             Terminate(),
