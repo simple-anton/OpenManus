@@ -1,6 +1,6 @@
 import asyncio
 import json
-from typing import Any, List, Optional, Union
+from typing import Any, ClassVar, List, Optional, Union
 
 from pydantic import Field
 
@@ -66,11 +66,26 @@ class ToolCallAgent(ReActAgent):
             self.current_step = max(0, self.current_step - 1)
         return True
 
+    # Предупреждение перед последним действием. Без него шаг, исчерпавший
+    # запас, обрывается на середине очередного вызова инструмента и не
+    # оставляет после себя ни строчки выводов: в журнал попадают только сырые
+    # выдачи, а всё понятое моделью пропадает вместе с её памятью.
+    LAST_CALL: ClassVar[str] = (
+        "ЭТО ВАШЕ ПОСЛЕДНЕЕ ДЕЙСТВИЕ В ЭТОМ ШАГЕ — запас закончился.\n"
+        "Больше ничего не собирайте. Вместо этого напишите ответом (не вызовом "
+        "инструмента) итог шага: что удалось выяснить, с числами, ссылками и "
+        "датами источников; чего добыть не удалось и почему. Закончите строкой "
+        "STEP RESULT: done / partial / blocked.\n"
+        "Всё, чего вы сейчас не напишете, для следующих шагов не сохранится."
+    )
+
     async def think(self) -> bool:
         """Process current state and decide next actions using tools"""
         # Старые ответы инструментов внутри длинного шага сворачиваем: они уже
         # отработаны, а возить их с собой в каждом запросе дорого.
         squash_old_observations(self)
+        if self.max_steps and self.current_step >= self.max_steps:
+            self.memory.add_message(Message.user_message(self.LAST_CALL))
         if self.next_step_prompt:
             user_msg = Message.user_message(self.next_step_prompt)
             self.messages += [user_msg]
