@@ -8,7 +8,13 @@ from pydantic import Field
 from app.agent.base import BaseAgent
 from app.flow.base import BaseFlow
 from app.flow.compaction import forget_previous_step
-from app.flow.ledger import Ledger, digest, outcome_of
+from app.flow.ledger import (
+    Ledger,
+    digest,
+    outcome_of,
+    ran_out_of_steps,
+    summarise,
+)
 from app.llm import LLM
 from app.logger import logger
 from app.schema import AgentState, Message, ToolChoice
@@ -358,19 +364,33 @@ class PlanningFlow(BaseFlow):
         return Ledger(self.workspace) if self.workspace else None
 
     def _record(self, step_text: str, summary: str, status: str) -> None:
-        """Кладёт итог шага и в память потока, и в файл журнала."""
+        """Кладёт итог шага и в память потока, и в файл журнала.
+
+        В журнал идёт именно ИТОГ, а не вся стенограмма шага: иначе журнал
+        разрастается до сотен тысяч знаков, и следующие шаги начинают тратить
+        свои действия на поиск нужного места внутри него.
+        """
+        short = summarise(summary)
+        if ran_out_of_steps(summary):
+            # Молчание об этом опаснее самой обрывы: отчёт потом собирают по
+            # пункту, который на деле не доработал.
+            short = (
+                "ВНИМАНИЕ: у шага кончился запас действий, он оборван на середине. "
+                "Всё, что ниже, — то, до чего он успел дойти. Считайте пункт "
+                "недоделанным и при необходимости вернитесь к нему.\n\n" + short
+            )
         self.step_records.append(
             {
                 "index": self.current_step_index + 1,
                 "text": step_text,
-                "summary": summary,
+                "summary": short,
                 "status": status,
             }
         )
         ledger = self._ledger()
         if ledger:
             # в журнале шаги нумеруем с единицы, как их видит человек в плане
-            ledger.append(self.current_step_index + 1, step_text, summary)
+            ledger.append(self.current_step_index + 1, step_text, short)
 
     def _carried_context(self) -> str:
         """Всё, что предыдущие шаги узнали, — в постановку задачи текущему."""
