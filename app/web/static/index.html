@@ -53,12 +53,31 @@
 
   /* centre column */
   main { flex: 1; min-width: 0; display: flex; flex-direction: column; background: var(--bg); }
-  main > header { display: flex; align-items: center; gap: 10px; padding: 11px 18px; border-bottom: 1px solid var(--line); background: var(--panel); }
-  #title { flex: 1; min-width: 0; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  /* Шапка обязана помещаться в свою ширину при любой длине содержимого.
+     Раньше строка состояния («Пункт 3/9 · действие 8/20 · 1625 с · 134k
+     токенов») стояла с nowrap и без права сжиматься — она распирала шапку и
+     выталкивала за край экрана кнопки, включая ту, которой закрывают правую
+     панель. Выбраться из этого было нечем. */
+  main > header { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; row-gap: 7px;
+    padding: 11px 18px; border-bottom: 1px solid var(--line); background: var(--panel); }
+  /* Название задачи уступает место первым: оно длинное и хорошо читается в
+     усечённом виде, а цифры прогресса короткие и нужны целиком. Но совсем
+     название не исчезает — иначе непонятно, в какой ты задаче. */
+  #title { flex: 1 20 auto; min-width: 120px; font-weight: 600; overflow: hidden;
+    text-overflow: ellipsis; white-space: nowrap; }
   .switch { display: inline-flex; flex: none; border: 1px solid var(--line); border-radius: 8px; overflow: hidden; }
   .switch button { border: 0; border-radius: 0; padding: 5px 12px; background: transparent; color: var(--muted); }
   .switch button.on { background: var(--accent-soft); color: var(--accent); font-weight: 600; }
-  #progress { color: var(--muted); font-size: 12.5px; white-space: nowrap; }
+  /* Сжимается неохотно — но сжимается, и никогда не выталкивает кнопки. */
+  #progress { color: var(--muted); font-size: 12.5px; white-space: nowrap;
+    flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+  /* Кнопки не сжимаются и не выталкиваются: до них должно быть можно дотянуться
+     всегда, что бы ни происходило слева. */
+  main > header > button, main > header > .picker { flex: none; }
+  /* Совсем узкое окно: панель компьютера ужимается, чтобы хватило и ей, и шапке. */
+  @media (max-width: 1150px) {
+    #computer { min-width: 290px; }
+  }
 
   #feed { flex: 1; overflow-y: auto; padding: 22px 26px 8px; }
   .stack { max-width: 760px; margin: 0 auto; display: flex; flex-direction: column; gap: 14px; }
@@ -160,8 +179,12 @@
   #computer { width: 46%; min-width: 360px; max-width: 680px; flex: none; display: flex; flex-direction: column; background: var(--panel); border-left: 1px solid var(--line); }
   #computer.hidden { display: none; }
   #computer.drop { outline: 2px dashed var(--accent); outline-offset: -8px; }
-  #computer > header { display: flex; align-items: center; gap: 9px; padding: 11px 14px; border-bottom: 1px solid var(--line); }
-  #computer h3 { margin: 0; font-size: 13px; font-weight: 600; flex: 1; }
+  #computer > header { display: flex; align-items: center; gap: 9px; padding: 11px 14px;
+    border-bottom: 1px solid var(--line); overflow: hidden; }
+  #computer h3 { margin: 0; font-size: 13px; font-weight: 600; flex: 1 1 auto; min-width: 0;
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  #computer > header .live { flex: 0 1 auto; min-width: 0; overflow: hidden; white-space: nowrap; }
+  #computer > header button { flex: none; }
   .tabs { display: flex; gap: 4px; padding: 8px 10px; border-bottom: 1px solid var(--line); overflow-x: auto; }
   .tabs button { padding: 5px 10px; font-size: 12.5px; color: var(--muted); border-color: transparent; background: transparent; white-space: nowrap; }
   .tabs button.on { background: var(--accent-soft); color: var(--accent); font-weight: 600; }
@@ -361,6 +384,7 @@
     <span class="live" title="Панель сама показывает текущий шаг. Снимите галочку, чтобы листать прошлые шаги вручную">
       <input type="checkbox" id="follow" checked /> следить</span>
     <button class="ghost" id="refresh-files" title="Обновить список файлов и инструментов">&#8635;</button>
+    <button class="ghost" id="close-computer" title="Скрыть эту панель">&#10005;</button>
   </header>
   <div class="tabs">
     <button data-tab="terminal" class="on" title="Код, который агент выполнял, и что тот вывел">Терминал</button>
@@ -2529,6 +2553,9 @@ $("new-task").onclick = async () => {
 };
 $("stop").onclick = () => api("/api/sessions/" + currentId + "/stop", { method: "POST" });
 $("toggle-computer").onclick = () => $("computer").classList.toggle("hidden");
+// Вторая дорога наружу: закрыть панель можно и из неё самой. Кнопка в шапке
+// слева когда-то уехала за край экрана, и закрыть панель стало нечем.
+$("close-computer").onclick = () => $("computer").classList.add("hidden");
 $("refresh-files").onclick = () => { preview = null; loadFiles(); refreshSession(); };
 $("follow").onchange = (event) => { if (event.target.checked) select(steps.length - 1); };
 $("open-settings").onclick = openSettings;
