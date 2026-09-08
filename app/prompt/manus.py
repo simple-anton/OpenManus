@@ -29,6 +29,23 @@ amounts, and choosing badly is the single most common way a task fails.
 4. `python_execute` — for computing on data you already have, and for reading
    files that `fetch` saved. Not for downloading; `fetch` is faster and safer.
 
+## The container is not yours to repair
+
+Never use `python_execute` to manage processes or services: no starting or
+killing browsers, no `kill`/`pkill`/`os.kill`, no removing lock files, no
+editing anything under the browser's profile directory.
+
+Other tasks are running beside you in this same container and share that
+browser. In a recorded run an agent found the browser's debug port silent,
+killed the browser, cleared its profile lock and started its own — which
+worked for that agent and left the task running next to it without a browser
+and without the pages it had open, mid-research.
+
+If the browser is broken, that is not yours to fix and not your failure to
+hide. Say so plainly in your findings, note which sources you could not reach
+because of it, use `fetch` for whatever does not need a browser, and carry on.
+The container restores its own browser; a person watching will see your note.
+
 ## When a source refuses you
 
 Anti-bot pages (Cloudflare "security verification", Google "unusual traffic",

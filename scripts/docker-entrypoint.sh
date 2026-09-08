@@ -25,6 +25,8 @@ DISPLAY_NUM="${CHROME_DISPLAY:-:99}"
 VNC_PORT="${VNC_PORT:-5900}"
 VIEW_PORT="${BROWSER_VIEW_PORT:-6080}"
 NOVNC_DIR="${NOVNC_DIR:-/usr/share/novnc}"
+# Как часто присматривать за отладочным портом браузера, секунд.
+WATCH_EVERY="${BROWSER_WATCH_INTERVAL:-15}"
 
 # Обычный (не headless) режим на виртуальном экране Xvfb. Headless-браузер
 # отличается от настоящего десятком признаков, и защита сайтов узнаёт его
@@ -143,8 +145,45 @@ start_live_view() {
     echo "browser: живой вид не поднялся — смотрите /tmp/websockify.log"
 }
 
+watch_browser() {
+    # Присматриваем за отладочным портом браузера.
+    #
+    # Зачем. В разобранном логе Chromium был жив, а порт 9222 не отвечал —
+    # вместо него висел осиротевший сокет на случайном порту. Агент решил
+    # чинить это сам: убил браузер контейнера сигналом TERM, снял замок с
+    # профиля и поднял собственный. Своей задаче он помог, но соседняя, шедшая
+    # параллельно, в этот момент осталась без браузера и без своих вкладок.
+    #
+    # Восстанавливать порт должен контейнер, а не агент. Проверяем раз в
+    # пятнадцать секунд и поднимаем заново после двух неудач подряд, чтобы не
+    # дёргаться на секундной заминке.
+    local misses=0
+    while true; do
+        sleep "$WATCH_EVERY"
+        if curl -fs -o /dev/null --max-time 3 \
+             "http://127.0.0.1:$CHROME_PORT/json/version" 2>/dev/null; then
+            misses=0
+            continue
+        fi
+        misses=$((misses + 1))
+        [ "$misses" -ge 2 ] || continue
+        echo "browser: отладочный порт $CHROME_PORT молчит — поднимаю браузер заново"
+        # Забираем профиль у зависшего процесса: без этого новый Chromium
+        # откажется стартовать с жалобой на занятый профиль.
+        pkill -f -- "--remote-debugging-port=$CHROME_PORT" 2>/dev/null
+        rm -f "$CHROME_PROFILE/SingletonLock" "$CHROME_PROFILE/SingletonSocket" \
+              "$CHROME_PROFILE/SingletonCookie" 2>/dev/null
+        sleep 2
+        start_browser
+        misses=0
+    done
+}
+
 # Ошибка внутри запуска браузера не должна помешать старту приложения.
 start_browser || echo "browser: запуск браузера не удался, продолжаю без него"
 start_live_view || echo "browser: живой вид не запустился, вход руками будет недоступен"
+if [ "${BROWSER_WATCHDOG:-1}" = "1" ]; then
+    watch_browser &
+fi
 
 exec "$@"
