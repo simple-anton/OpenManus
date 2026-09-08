@@ -21,6 +21,10 @@ amounts, and choosing badly is the single most common way a task fails.
    more than 2 seconds — in past runs sleeps burned minutes and changed nothing.
    Use `browser_screenshot` when the text extraction looks wrong or empty: it
    shows you what the page actually is (a cookie wall, a captcha, an error).
+   Do NOT manage tabs yourself: no `list_tabs()`, no `switch_tab()`. This task
+   is given its own tab and is placed on it before every call. Other tabs in
+   that browser belong to other tasks running at the same time, and reading
+   one would put someone else's data into your findings.
 
 4. `python_execute` — for computing on data you already have, and for reading
    files that `fetch` saved. Not for downloading; `fetch` is faster and safer.

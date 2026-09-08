@@ -21,7 +21,7 @@ from typing import Any, Dict, List, Optional
 from app.agent.manus import Manus
 from app.logger import logger
 from app.schema import ToolCall
-from app.web import diagnostics
+from app.web import browser_tabs, diagnostics
 
 
 # Screenshots live inside the container, not in the mounted workspace: they are
@@ -188,6 +188,45 @@ class WebAgentMixin:
                 tokens_out=self.llm.total_completion_tokens - before_out,
             )
 
+    def _pin_browser_code(self, command: ToolCall, name: str) -> ToolCall:
+        """Обрамляет код для браузера переключением на вкладку этой задачи."""
+        if name != "browser_exec":
+            return command
+        try:
+            args = json.loads(command.function.arguments or "{}")
+        except json.JSONDecodeError:
+            return command  # разбирать сломанный вызов не наша забота
+        if "code" not in args:
+            return command
+        args["code"] = browser_tabs.wrap(args["code"], self.session.browser_tab)
+        # копия, чтобы в ленте у человека остался код, который написала модель
+        return command.model_copy(
+            update={
+                "function": command.function.model_copy(
+                    update={"arguments": json.dumps(args, ensure_ascii=False)}
+                )
+            }
+        )
+
+    async def _claim_tab(self, name: str) -> None:
+        """Ставит текущей вкладку этой задачи перед снимком экрана.
+
+        У browser_screenshot нет параметра с кодом, а снимает он текущую
+        вкладку — значит, возможно, чужую. Переключаемся отдельным вызовом.
+        """
+        if name != "browser_screenshot":
+            return
+        tool = self.available_tools.tool_map.get("browser_exec")
+        if tool is None:
+            return
+        try:
+            result = await tool(code=browser_tabs.switch_only(self.session.browser_tab))
+            _, tab = browser_tabs.take_tab(str(result))
+            if tab:
+                self.session.browser_tab = tab
+        except Exception as error:  # снимок важнее, чем идеальная вкладка
+            logger.warning(f"Не удалось переключиться на свою вкладку: {error}")
+
     async def think(self) -> bool:
         before = self.truncation_retries
         should_act = await super().think()
@@ -230,7 +269,15 @@ class WebAgentMixin:
         self.session.publish("tool_start", call_id=command.id, name=name, args=args)
 
         started = time.monotonic()
+        # Браузер в контейнере один на все задачи, и «текущая вкладка» — его
+        # общее состояние. Без этого соседняя задача читает чужую страницу.
+        await self._claim_tab(name)
+        command = self._pin_browser_code(command, name)
         result = await super().execute_tool(command)
+        if name == "browser_exec":
+            result, tab = browser_tabs.take_tab(result)
+            if tab:
+                self.session.browser_tab = tab
         failed = _looks_failed(result)
         if not failed and name != "terminate" and result.strip():
             # запасной итог: если модель завершит работу молча, показать это

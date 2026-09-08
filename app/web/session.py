@@ -15,6 +15,7 @@ from pathlib import Path
 from typing import Any, AsyncIterator, Dict, List, Optional, Set
 
 from app.config import config
+from app.llm import LLM
 from app.logger import logger
 from app.prompt.manus import SYSTEM_PROMPT
 from app.schema import Message
@@ -120,6 +121,9 @@ class Session:
         # решение человека по просьбе войти на сайт: done или skip
         self._logins: asyncio.Queue = asyncio.Queue()
         self.pending_login: Optional[Dict[str, str]] = None
+        # Вкладка браузера, принадлежащая этой задаче. Браузер в контейнере
+        # один на всех, и без своей вкладки задачи читают чужие страницы.
+        self.browser_tab: Optional[str] = None
         self._queued: deque = deque()
         self._event_id = 0
         self._agent_lock = asyncio.Lock()
@@ -290,6 +294,10 @@ class Session:
         async with self._agent_lock:
             if self.agent is None:
                 agent = await WebManus.create(session=self)
+                # Свой экземпляр модели на задачу: общий одиночка складывает
+                # счётчики токенов всех задач разом и делит между ними
+                # причину остановки последней генерации.
+                agent.llm = LLM.isolated()
                 self._attach_web_tools(agent)
                 self._carry_memory(agent)
                 self.agent = agent
@@ -585,6 +593,7 @@ class Session:
                     message=f"Агент анализа данных недоступен: {exc}",
                 )
             else:
+                analyst.llm = LLM.isolated()
                 analyst.max_steps = self.max_steps
                 # the analyst has its own prompt; the task's skills apply to it too
                 analyst.system_prompt += skills_store.prompt_for(self.skills)
@@ -598,6 +607,8 @@ class Session:
         flow = WebPlanningFlow(
             agents,
             session=self,
+            # планировщик тоже считает токены — и тоже своим счётчиком
+            llm=LLM.isolated(),
             planning_context=skills_store.planning_prompt_for(self.skills),
             step_budget=self.max_steps,
             # журнал находок ложится в папку задачи: это общая память шагов

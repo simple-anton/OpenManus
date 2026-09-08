@@ -183,6 +183,22 @@ class LLM:
             cls._instances[config_name] = instance
         return cls._instances[config_name]
 
+    @classmethod
+    def isolated(
+        cls, config_name: str = "default", llm_config: Optional[LLMSettings] = None
+    ) -> "LLM":
+        """Экземпляр вне общего реестра — свой у каждой задачи.
+
+        Обычный LLM() — одиночка на весь процесс: один и тот же объект
+        достаётся всем задачам сразу. Пока задача одна, это незаметно. Когда
+        их две, они делят счётчики токенов (свежая задача начинается с чужих
+        сотен тысяч), общий предел max_input_tokens и причину остановки
+        последней генерации — а по ней агент решает, оборвался ли ЕГО ответ.
+        """
+        instance = object.__new__(cls)
+        instance.__init__(config_name, llm_config)
+        return instance
+
     def __init__(
         self, config_name: str = "default", llm_config: Optional[LLMSettings] = None
     ):
