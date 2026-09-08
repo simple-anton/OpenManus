@@ -16,7 +16,11 @@ CHROME_BIN="${CHROME_BIN:-/usr/bin/chromium}"
 CHROME_PROFILE="${CHROME_PROFILE:-/root/.config/chromium}"
 CHROME_PORT="${CHROME_CDP_PORT:-9222}"
 CHROME_LANG="${CHROME_LANG:-en-US,en,ru}"
-SCREEN="${CHROME_SCREEN:-1920x1080x24}"
+# Размер виртуального экрана. 1440x900 — обычный ноутбучный размер: он и
+# выглядит естественнее для сайтов, и, главное, помещается в окно живого вида
+# почти один к одному. При 1920x1080 картинку приходилось ужимать, и форма
+# входа получалась мелкой до нечитаемости.
+SCREEN="${CHROME_SCREEN:-1440x900x24}"
 DISPLAY_NUM="${CHROME_DISPLAY:-:99}"
 VNC_PORT="${VNC_PORT:-5900}"
 VIEW_PORT="${BROWSER_VIEW_PORT:-6080}"

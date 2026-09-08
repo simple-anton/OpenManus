@@ -48,8 +48,16 @@ DECISION_SKIP = "skip"
 
 
 def view_url() -> str:
-    """Адрес окна с живым видом. Открывается в рамке внутри интерфейса."""
-    return f"http://127.0.0.1:{VIEW_PORT}/vnc.html?autoconnect=1&resize=scale"
+    """Адрес окна с живым видом. Открывается в рамке внутри интерфейса.
+
+    resize=scale подгоняет удалённый экран под размер рамки — иначе видна
+    только левая верхняя четверть. reconnect поднимает связь сам: человек
+    может провозиться с паролем дольше, чем держится соединение.
+    """
+    return (
+        f"http://127.0.0.1:{VIEW_PORT}/vnc.html"
+        "?autoconnect=1&resize=scale&reconnect=1&reconnect_delay=2000"
+    )
 
 
 async def open_in_browser(url: str) -> bool:
