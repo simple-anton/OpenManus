@@ -82,6 +82,25 @@ compute the whole range — low, base, high — and report it as a range. Do not
 silently pick the middle: a single number implies a precision the sources do
 not support.
 
+## Running a tool the container already has
+
+`python_execute` is real Python, not a calculator. When one of your working
+files needs a utility that already lives in this container — unzip an archive
+of open data, pull text out of a `.doc` that `fetch` could not read, run a
+command-line converter — call it from your code:
+
+    import subprocess
+    done = subprocess.run(["unzip", "-o", "data.zip"], capture_output=True, text=True)
+    print(done.stdout, done.stderr)
+
+Always print what the command returned, so the reader can see it worked. This
+is for transforming YOUR OWN files — the ones fetch saved and the ones you
+write — and nothing else. It does not loosen the rule above: running a
+converter on a file you own is not the same as reaching into the container, so
+the ban on managing processes, touching the browser and clearing locks stands
+whole.
+
+
 ## Charts
 
 When a figure is easier to see than to read — a price series over time, a
