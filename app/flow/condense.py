@@ -222,6 +222,75 @@ async def essence(llm, summary: str, step: str = "") -> str:
     return " ".join(answer.split())[:300]
 
 
+STEP_SYSTEM = """\
+You are given everything a research agent said to itself while working one step
+of a plan, in order. You return the record of that step for the task's journal.
+
+The step's own conversation is thrown away right after this, and later steps —
+including the one that writes the report — see only what you return and the
+findings the agent filed separately. So keep what a later step would need and
+could not get anywhere else.
+
+Rules:
+1. QUOTE FIGURES VERBATIM, with their units and the wording around them. Never
+   round, convert or restate a number.
+2. KEEP THE ASIDES. What the agent noticed in passing is what disappears
+   otherwise: that a source only covers one region, that a rate excludes
+   insurance, that two sources disagree, that something was assumed rather
+   than read. These are the reason this record exists.
+3. INVENT NOTHING. Everything must trace back to what the agent said.
+4. Say plainly what the step failed to get, and why.
+5. Answer in the language the agent used.
+
+Reply in exactly this shape, nothing before or after:
+
+СУТЬ: one line, under 200 characters, what the step established, with figures.
+ИТОГ:
+the record itself, a few short paragraphs or a list.
+"""
+
+GIST = re.compile(r"(?m)^\s*СУТЬ\s*:\s*(.+?)\s*$")
+BODY = re.compile(r"(?ms)^\s*ИТОГ\s*:\s*\n?(.+)$")
+
+
+async def step_digest(llm, said: str, step: str = "",
+                      budget: Optional[int] = None) -> Tuple[str, str]:
+    """Итог пункта и его суть — одним обращением к читающей модели.
+
+    Прежде итог был срезом с конца: из двадцати реплик в журнал попадали
+    последние восемь, и начало пункта — где агент разбирался с источниками и
+    отмечал оговорки — пропадало. Здесь модель читает всё сказанное за пункт и
+    пишет запись по нему целиком.
+
+    Возвращает («итог», «суть»). Пустые строки означают, что не получилось и
+    звать надо прежний путь: срез хуже пересказа, но лучше пустоты.
+    """
+    said = (said or "").strip()
+    if not said:
+        return "", ""
+    try:
+        answer = await llm.ask(
+            messages=[Message.user_message(
+                f"ПУНКТ ПЛАНА: {step}\n\nВСЁ, ЧТО АГЕНТ СКАЗАЛ ЗА ЭТОТ ПУНКТ:\n{said}"
+            )],
+            system_msgs=[Message.system_message(STEP_SYSTEM)],
+            stream=False,
+        )
+    except Exception as error:
+        logger.warning(f"Итог пункта не пересказан: {error}")
+        return "", ""
+
+    gist_match = GIST.search(answer)
+    body_match = BODY.search(answer)
+    gist = " ".join(gist_match.group(1).split())[:300] if gist_match else ""
+    body = (body_match.group(1) if body_match else answer).strip()
+    if not body:
+        return "", gist
+    if budget and len(body) > budget:
+        body = body[:budget] + "\n\n[…итог пункта не уместился и обрезан здесь.]"
+    return body, gist
+
+
 def is_digest(text: str) -> bool:
     """Это уже пересказ — второй раз его сжимать незачем."""
     return text.lstrip().startswith(MARK)

@@ -8,13 +8,15 @@ from pydantic import Field
 from app.agent.base import BaseAgent
 from app.flow.base import BaseFlow
 from app.flow.compaction import forget_previous_step
-from app.flow.condense import essence
+from app.flow.condense import essence, step_digest
 from app.flow.ledger import (
     Ledger,
+    MAX_ENTRY,
     digest,
     outcome_of,
     ran_out_of_steps,
     spoken,
+    spoken_all,
     summarise,
 )
 from app.llm import LLM
@@ -352,21 +354,27 @@ class PlanningFlow(BaseFlow):
             return f"Error executing step {self.current_step_index}: {str(e)}"
 
         # В журнал идут слова модели, а не выдачи инструментов: то, что вернул
-        # шаг, состоит только из вторых. Если модель не сказала за шаг ни слова,
-        # выбирать не из чего — тогда сырьё лучше пустоты.
-        summary = spoken(executor) or summarise(step_result)
-        # Шаг сам сообщает, чем кончился. Раньше любой шаг помечался как
-        # выполненный — даже тот, чьи действия целиком упёрлись в капчу.
-        # Пометку «STEP RESULT: …» модель пишет своими словами, поэтому и
-        # исход читаем оттуда же; обрыв по пределу действий виден только в
+        # шаг, состоит только из вторых.
+        said = spoken_all(executor)
+        reader = getattr(executor, "reader", None)
+        summary, gist = "", ""
+        # Длинный пункт пересказываем целиком. Срез с конца оставлял от двадцати
+        # реплик последние восемь, и начало — где агент разбирался с источниками
+        # и отмечал оговорки — в журнал не попадало вовсе.
+        if reader and len(said) > MAX_ENTRY:
+            summary, gist = await step_digest(reader, said, step_text, MAX_ENTRY)
+        if not summary:
+            # Короткий пункт пересказывать незачем, а неудача пересказа не
+            # повод остаться без записи: срез хуже, но лучше пустоты.
+            summary = spoken(executor) or summarise(step_result)
+            if reader and not gist:
+                gist = await essence(reader, summary, step_text)
+        # Шаг сам сообщает, чем кончился. Пометку «STEP RESULT: …» модель пишет
+        # своими словами — и читаем мы её из них же, а не из пересказа: там она
+        # могла и не уцелеть. Обрыв по пределу действий виден только в
         # возвращённой строке, его проверяем отдельно.
         exhausted = ran_out_of_steps(step_result)
-        status = "partial" if exhausted else outcome_of(summary)
-        # Суть пункта одной строкой — она попадёт в оглавление журнала, когда
-        # он перестанет помещаться целиком. Заголовок записи говорит лишь, о
-        # чём был пункт; что он выяснил, видно только отсюда.
-        reader = getattr(executor, "reader", None)
-        gist = await essence(reader, summary, step_text) if reader else ""
+        status = "partial" if exhausted else outcome_of(said or summary)
         self._record(step_text, summary, status, exhausted=exhausted, essence=gist)
         await self._mark_step_completed(
             PlanStepStatus.BLOCKED.value

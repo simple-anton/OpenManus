@@ -291,6 +291,22 @@ def summarise(result: str) -> str:
     return "\n\n".join(reversed(picked))
 
 
+def spoken_parts(agent: object) -> List[str]:
+    """Все реплики модели за этот шаг, по порядку и без среза."""
+    memory = getattr(agent, "memory", None)
+    messages = getattr(memory, "messages", None) or []
+    return [
+        (message.content or "").strip()
+        for message in messages
+        if getattr(message, "role", "") == "assistant" and (message.content or "").strip()
+    ]
+
+
+def spoken_all(agent: object) -> str:
+    """Всё сказанное моделью за шаг целиком — вход для читающей модели."""
+    return "\n\n".join(spoken_parts(agent))
+
+
 def spoken(agent: object) -> str:
     """Слова самой модели за этот шаг — то, что она поняла и сказала.
 
@@ -309,13 +325,7 @@ def spoken(agent: object) -> str:
     Память исполнителя перед пунктом очищается, так что все реплики в ней —
     этого шага. Набираем с конца назад: там выводы, а не планы на будущее.
     """
-    memory = getattr(agent, "memory", None)
-    messages = getattr(memory, "messages", None) or []
-    parts = [
-        (message.content or "").strip()
-        for message in messages
-        if getattr(message, "role", "") == "assistant" and (message.content or "").strip()
-    ]
+    parts = spoken_parts(agent)
     picked: List[str] = []
     size = 0
     for chunk in reversed(parts):
