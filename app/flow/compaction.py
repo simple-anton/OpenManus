@@ -45,18 +45,28 @@ STUB = (
 def forget_previous_step(agent: Any) -> int:
     """Очищает память исполнителя перед новым пунктом плана.
 
+    Выбрасывается разговор прошлого пункта, но не постоянные указания.
+    Подключённый плагин кладёт свою инструкцию по применению в память
+    системным сообщением, и один раз: сторож `mcp_instruction_servers` не даёт
+    добавить её повторно. Полная очистка сносила её перед первым же пунктом, и
+    дальше указания плагина не действовали ни на одном — проверено отдельно.
+    Системные сообщения и есть постоянные указания, их и оставляем.
+
     Возвращает, сколько сообщений выброшено — чтобы это было видно в логе.
     """
     _reset_blocked_sources(agent)
     memory = getattr(agent, "memory", None)
     if memory is None:
         return 0
-    dropped = len(memory.messages)
+    standing = [message for message in memory.messages if message.role == "system"]
+    dropped = len(memory.messages) - len(standing)
     if dropped:
         memory.clear()
+        memory.messages.extend(standing)
+        kept = f", оставлено постоянных указаний: {len(standing)}" if standing else ""
         logger.info(
             f"Память исполнителя очищена перед новым пунктом плана: "
-            f"снято {dropped} сообщений. Контекст приходит из журнала находок."
+            f"снято {dropped} сообщений{kept}. Контекст приходит из журнала находок."
         )
     return dropped
 
