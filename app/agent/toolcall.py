@@ -47,6 +47,10 @@ class ToolCallAgent(ReActAgent):
     # снаружи (веб-интерфейсом); если её нет, длинные ответы просто обрезаются.
     reader: Any = None
 
+    # Модель зрения: ею описываются снимки экрана, когда основная модель
+    # смотреть на картинки не умеет. Тоже ставится снаружи.
+    vision: Any = None
+
     # Инструменты, чей ответ пересказывать нельзя. Это не «длинный текст», а
     # результат вычисления, содержимое файла или служебный ответ: их надо
     # видеть дословно, и пересказ тут только вредит.
@@ -98,6 +102,44 @@ class ToolCallAgent(ReActAgent):
             "Загруженные страницы и документы сохранены файлами в рабочей "
             "папке — читайте нужное место поиском по ним через python_execute.]"
         )
+
+    NO_EYES: ClassVar[str] = (
+        "[СНИМОК ЭКРАНА СДЕЛАН, НО ПОКАЗАТЬ ЕГО МОДЕЛИ НЕЧЕМ. Основная модель не "
+        "объявлена умеющей смотреть на картинки, и модель зрения не настроена — "
+        "так что содержимого снимка вы не видите и судить о нём не можете. "
+        "Человеку снимок виден в ленте. Включить: Настройки → Модель → «Модель "
+        "умеет смотреть на картинки», либо Настройки → Модель зрения.]"
+    )
+
+    VISION_ASK: ClassVar[str] = (
+        "Опиши, что показано на этом снимке экрана. Это снимок страницы, "
+        "которую разбирает исследовательский агент. Важно назвать: что это за "
+        "страница, есть ли на ней форма входа, проверка «вы не робот», "
+        "сообщение об ошибке или пустой каркас; если видны данные — приведи "
+        "числа и подписи дословно. Ничего не додумывай: чего на снимке нет, "
+        "того не пиши. Отвечай на языке задачи.\n\nЗАДАЧА АГЕНТА: {task}"
+    )
+
+    async def _describe_image(self, tool: str) -> str:
+        """Описывает снимок словами, когда основная модель его не увидит."""
+        if self.vision is None:
+            return self.NO_EYES
+        try:
+            described = await self.vision.ask_with_images(
+                messages=[Message.user_message(
+                    self.VISION_ASK.format(task=self._task_text() or "не передана")
+                )],
+                images=[self._current_base64_image],
+                stream=False,
+            )
+        except Exception as error:  # без описания обойдёмся, без шага — нет
+            logger.warning(f"Снимок экрана не описан: {error}")
+            return (
+                f"[Снимок экрана сделан, но модель зрения его не описала: {error}. "
+                "Судить о содержимом снимка нельзя.]"
+            )
+        logger.info(f"Снимок из {tool} описан моделью зрения ({len(described)} знаков)")
+        return f"[СНИМОК ЭКРАНА, описан моделью зрения]\n{described.strip()}"
 
     def _task_text(self) -> str:
         """Постановка задачи — она же ориентир для читающей модели."""
@@ -281,12 +323,20 @@ class ToolCallAgent(ReActAgent):
             )
             self.memory.add_message(tool_msg)
             if self._current_base64_image:
-                image_messages.append(
-                    Message.user_message(
-                        content=f"Image returned by {command.function.name}:",
-                        base64_image=self._current_base64_image,
+                if self.llm.supports_images:
+                    image_messages.append(
+                        Message.user_message(
+                            content=f"Image returned by {command.function.name}:",
+                            base64_image=self._current_base64_image,
+                        )
                     )
-                )
+                else:
+                    # Картинку всё равно вырежут перед отправкой, а вместо неё
+                    # модель получит слова «Image returned.» — и будет судить о
+                    # странице, ничего не увидев. Лучше описать снимок словами.
+                    seen = await self._describe_image(command.function.name)
+                    result = f"{result}\n\n{seen}"
+                    self.memory.messages[-1].content = result
             results.append(result)
 
         self.memory.add_messages(image_messages)

@@ -26,6 +26,15 @@ class LLMSettings(BaseModel):
         description="Maximum input tokens to use across all requests (None for unlimited)",
     )
     temperature: float = Field(1.0, description="Sampling temperature")
+    supports_images: bool = Field(
+        False,
+        description=(
+            "Умеет ли эта модель смотреть на картинки. Раньше это решал список "
+            "из шести имён моделей начала 2024 года: всё, что в него не попало, "
+            "теряло снимок экрана молча. Имена моделей произвольны, угадывать "
+            "их бессмысленно — пусть решает настройка."
+        ),
+    )
     api_type: str = Field(..., description="Azure, Openai, or Ollama")
     api_version: str = Field(..., description="Azure Openai version if AzureOpenai")
 

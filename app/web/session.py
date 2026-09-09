@@ -306,6 +306,7 @@ class Session:
                 # Модель чтения: ею пересказываются длинные ответы инструментов.
                 # Своя настройка [llm.reader], если её нет — та же основная.
                 agent.reader = LLM.isolated("reader")
+                agent.vision = self._vision_llm()
                 self._attach_web_tools(agent)
                 self._carry_memory(agent)
                 self.agent = agent
@@ -316,6 +317,21 @@ class Session:
             self.agent.max_observe = config.agent_config.max_observe
             self.apply_prompt()
             return self.agent
+
+    def _vision_llm(self) -> Optional[LLM]:
+        """Модель зрения, если она указана в настройках.
+
+        Слот [llm.vision] в проекте был, вкладка в настройках была, а кода,
+        который бы его создавал, не существовало: настройка сохранялась и не
+        работала. Модель, поставленную сюда, считаем умеющей смотреть на
+        картинки — иначе ставить её в этот слот незачем.
+        """
+        section = config.llm.get("vision")
+        if section is None or not (section.model or "").strip():
+            return None
+        vision = LLM.isolated("vision")
+        vision.supports_images = True
+        return vision
 
     def _report_mcp(self, agent: WebManus) -> None:
         """Say which configured plugins did not come up, instead of hiding it in logs."""

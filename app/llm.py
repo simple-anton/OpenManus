@@ -208,6 +208,11 @@ class LLM:
             self.model = llm_config.model
             self.max_tokens = llm_config.max_tokens
             self.temperature = llm_config.temperature
+            # Настройка главнее списка имён; список остаётся, чтобы известные
+            # модели продолжали работать без правки конфига.
+            self.supports_images = bool(
+                getattr(llm_config, "supports_images", False)
+            ) or self.model in MULTIMODAL_MODELS
             self.api_type = llm_config.api_type
             self.api_key = llm_config.api_key
             self.api_version = llm_config.api_version
@@ -403,7 +408,7 @@ class LLM:
         """
         try:
             # Check if the model supports images
-            supports_images = self.model in MULTIMODAL_MODELS
+            supports_images = self.supports_images
 
             # Format system and user messages with image support check
             if system_msgs:
@@ -533,9 +538,11 @@ class LLM:
         try:
             # For ask_with_images, we always set supports_images to True because
             # this method should only be called with models that support images
-            if self.model not in MULTIMODAL_MODELS:
+            if not self.supports_images:
                 raise ValueError(
-                    f"Model {self.model} does not support images. Use a model from {MULTIMODAL_MODELS}"
+                    f"Модель {self.model} не объявлена умеющей смотреть на "
+                    "картинки. Включите это в Настройках → Модель, либо "
+                    "укажите отдельную модель зрения."
                 )
 
             # Format messages with image support
@@ -696,7 +703,7 @@ class LLM:
                 raise ValueError(f"Invalid tool_choice: {tool_choice}")
 
             # Check if the model supports images
-            supports_images = self.model in MULTIMODAL_MODELS
+            supports_images = self.supports_images
 
             # Format messages
             if system_msgs:
