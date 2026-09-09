@@ -32,8 +32,18 @@ from app.logger import logger
 
 FILE_NAME = "findings.md"
 
-# Начало каждой записи журнала.
-ENTRY_START = re.compile(r"(?m)^## ")
+# Метка начала записи. Заголовок для этого не годится: агент вписывает в
+# находки выдержки из источников, а на сайтах банков и статведомств строки
+# «## Раздел 3. Комиссии» — обычное дело. Такая строка становилась поддельной
+# записью: попадала в оглавление как отдельный факт, врала счётчику и служила
+# границей обрезки, из-за чего «полный текст записи» мог начаться с середины
+# чужой находки. Метка — наша, в markdown невидима, и из тела вычищается при
+# записи, так что подделать её нечем.
+MARKER = "<!-- om-запись -->"
+ENTRY_START = re.compile(r"(?m)^" + re.escape(MARKER) + r"$")
+
+# Журналы, записанные до появления метки, разбираем по-старому.
+LEGACY_START = re.compile(r"(?m)^## ")
 
 # Сколько заголовков опущенных записей перечислять. Это оглавление, а не
 # содержание: его дело — подсказать, что искать в файле, и самому не разрастись.
@@ -50,18 +60,84 @@ HEADER = """# Журнал находок
 """
 
 
+def _clean(text: str) -> str:
+    """Убирает из текста агента нашу служебную метку.
+
+    Агент может прочитать журнал и вставить кусок в новую находку — тогда
+    метка попала бы в тело и снова разъехались бы границы записей. Вычищаем
+    при записи: инвариант «метка = начало записи» должен держаться всегда.
+    """
+    return (text or "").replace(MARKER, "").strip()
+
+
+def _starts(text: str) -> List[int]:
+    """Смещения начал записей. По метке, а для старых журналов — по заголовку."""
+    found = [match.start() for match in ENTRY_START.finditer(text)]
+    return found or [match.start() for match in LEGACY_START.finditer(text)]
+
+
+# Поля, которые пишет сюда наш же код: их можно доставать разбором, без модели.
+FIELD = {
+    "source": re.compile(r"(?m)^Источник:\s*(.+)$"),
+    "dated": re.compile(r"(?m)^Дата источника:\s*(.+)$"),
+    "essence": re.compile(r"(?m)^Суть:\s*(.+)$"),
+}
+HEADING = re.compile(r"(?m)^## (.+)$")
+
+# Сколько знаков источника показывать в строке оглавления.
+SOURCE_IN_LINE = 46
+
+
+def _line(entry: str) -> str:
+    """Строка оглавления: заголовок записи плюс то, чем её можно опознать.
+
+    Всё берётся из записи дословно. Оглавление — карта, по которой агент
+    решает, лезть ли в запись; искажение в ней он не заметит, потому что
+    проверять не пойдёт. Поэтому здесь нет пересказа: только копирование.
+    """
+    heading = HEADING.search(entry)
+    text = heading.group(1).strip() if heading else "(без заголовка)"
+    essence = FIELD["essence"].search(entry)
+    if essence:
+        text += " — " + essence.group(1).strip()
+    tail = []
+    source = FIELD["source"].search(entry)
+    if source:
+        value = source.group(1).strip()
+        value = re.sub(r"^https?://(www\.)?", "", value)
+        if len(value) > SOURCE_IN_LINE:
+            value = value[:SOURCE_IN_LINE].rstrip("/") + "…"
+        tail.append(value)
+    dated = FIELD["dated"].search(entry)
+    if dated:
+        tail.append(dated.group(1).strip())
+    if tail:
+        text += " — " + ", ".join(tail)
+    return text
+
+
 class Ledger:
     """Файл findings.md в папке задачи."""
 
     def __init__(self, folder: Path | str):
         self.path = Path(folder) / FILE_NAME
 
-    def append(self, step_index: int, step_text: str, body: str) -> None:
-        """Дописывает итог шага. Пустые итоги не пишем — они только шумят."""
-        body = (body or "").strip()
+    def append(self, step_index: int, step_text: str, body: str,
+               essence: str = "") -> None:
+        """Дописывает итог шага. Пустые итоги не пишем — они только шумят.
+
+        `essence` — одна строка о том, что пункт выяснил. У записей агента суть
+        видна из заголовка (это первая строка находки) и из полей источника; у
+        итога пункта заголовок говорит лишь, о чём пункт был. Поэтому здесь
+        суть приходит отдельно, от читающей модели.
+        """
+        body = _clean(body)
         if not body:
             return
-        self._write(f"## Шаг {step_index}: {step_text}\n{self._stamp()}\n\n{body}\n")
+        entry = f"## Шаг {step_index}: {step_text}\n{self._stamp()}\n\n{body}\n"
+        if essence.strip():
+            entry += f"\nСуть: {_clean(essence)}\n"
+        self._write(entry)
 
     def note(self, fact: str, source: str = "", dated: str = "") -> int:
         """Дописывает отдельную находку и возвращает, сколько их стало.
@@ -70,7 +146,7 @@ class Ledger:
         находки: журнал читает и человек, и «## Находка» двести раз подряд ему
         ничего не скажет.
         """
-        fact = (fact or "").strip()
+        fact = _clean(fact)
         if not fact:
             return self.count()
         head = fact.splitlines()[0].strip()
@@ -78,16 +154,16 @@ class Ledger:
             head = head[:NOTE_HEADING].rstrip() + "…"
         entry = f"## {head}\n{self._stamp()}\n\n{fact}\n"
         if source.strip():
-            entry += f"\nИсточник: {source.strip()}\n"
+            entry += f"\nИсточник: {_clean(source)}\n"
         if dated.strip():
-            entry += f"Дата источника: {dated.strip()}\n"
+            entry += f"Дата источника: {_clean(dated)}\n"
         self._write(entry)
         return self.count()
 
     def count(self) -> int:
         """Сколько записей уже в журнале."""
         try:
-            return self.path.read_text(encoding="utf-8").count("\n## ")
+            return len(_starts(self.path.read_text(encoding="utf-8")))
         except (OSError, UnicodeDecodeError):
             return 0
 
@@ -102,7 +178,7 @@ class Ledger:
             if not self.path.exists():
                 self.path.write_text(HEADER, encoding="utf-8")
             with self.path.open("a", encoding="utf-8") as handle:
-                handle.write("\n\n" + entry)
+                handle.write("\n\n" + MARKER + "\n" + entry)
         except OSError as error:
             logger.warning(f"Журнал находок не записан: {error}")
 
@@ -122,7 +198,7 @@ class Ledger:
         if len(text) <= limit:
             return text
 
-        starts = [match.start() for match in ENTRY_START.finditer(text)]
+        starts = _starts(text)
         if not starts:  # файл без записей — резать по границам нечего
             return text[-limit:]
 
@@ -146,6 +222,7 @@ class Ledger:
         """Оглавление записей, которые в окно не поместились."""
         listed = omitted[-MAX_OMITTED_LISTED:]
         earlier = len(omitted) - len(listed)
+        bounds = _starts(text) + [len(text)]
         lines = [
             f"[В журнале {total} записей, целиком они сюда не помещаются. "
             f"Ниже — оглавление {len(omitted)} ранних записей, а под ним полный "
@@ -157,9 +234,8 @@ class Ledger:
         if earlier:
             lines.append(f"- […и ещё {earlier} записей до перечисленных]")
         for start in listed:
-            end = text.find("\n", start)
-            heading = (text[start:end] if end > 0 else text[start:])[3:].strip()
-            lines.append(f"- {heading}")
+            after = next((edge for edge in bounds if edge > start), len(text))
+            lines.append("- " + _line(text[start:after]))
         return "\n".join(lines)
 
 

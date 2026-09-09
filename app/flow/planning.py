@@ -8,6 +8,7 @@ from pydantic import Field
 from app.agent.base import BaseAgent
 from app.flow.base import BaseFlow
 from app.flow.compaction import forget_previous_step
+from app.flow.condense import essence
 from app.flow.ledger import (
     Ledger,
     digest,
@@ -361,7 +362,12 @@ class PlanningFlow(BaseFlow):
         # возвращённой строке, его проверяем отдельно.
         exhausted = ran_out_of_steps(step_result)
         status = "partial" if exhausted else outcome_of(summary)
-        self._record(step_text, summary, status, exhausted=exhausted)
+        # Суть пункта одной строкой — она попадёт в оглавление журнала, когда
+        # он перестанет помещаться целиком. Заголовок записи говорит лишь, о
+        # чём был пункт; что он выяснил, видно только отсюда.
+        reader = getattr(executor, "reader", None)
+        gist = await essence(reader, summary, step_text) if reader else ""
+        self._record(step_text, summary, status, exhausted=exhausted, essence=gist)
         await self._mark_step_completed(
             PlanStepStatus.BLOCKED.value
             if status == "blocked"
@@ -373,7 +379,8 @@ class PlanningFlow(BaseFlow):
         return Ledger(self.workspace) if self.workspace else None
 
     def _record(
-        self, step_text: str, summary: str, status: str, exhausted: bool = False
+        self, step_text: str, summary: str, status: str, exhausted: bool = False,
+        essence: str = "",
     ) -> None:
         """Кладёт готовый итог шага и в память потока, и в файл журнала.
 
@@ -401,7 +408,7 @@ class PlanningFlow(BaseFlow):
         ledger = self._ledger()
         if ledger:
             # в журнале шаги нумеруем с единицы, как их видит человек в плане
-            ledger.append(self.current_step_index + 1, step_text, short)
+            ledger.append(self.current_step_index + 1, step_text, short, essence)
 
     def _carried_context(self) -> str:
         """Всё, что предыдущие шаги узнали, — в постановку задачи текущему."""

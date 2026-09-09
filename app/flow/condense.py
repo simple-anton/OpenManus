@@ -187,6 +187,41 @@ async def condense(llm, text: str, task: str = "", budget: Optional[int] = None,
     return digest
 
 
+ESSENCE_SYSTEM = """\
+You compress the outcome of one research step into ONE line for a table of
+contents. The line is what a later step reads to decide whether to open the
+full entry, so it must say what was ESTABLISHED, not what was attempted.
+
+Rules: quote figures exactly as given, with units; name the sources briefly;
+if the step established nothing, say exactly that and why. No preamble, no
+formatting, no more than 200 characters. Answer in the language of the step.
+"""
+
+
+async def essence(llm, summary: str, step: str = "") -> str:
+    """Одна строка о том, что пункт выяснил. Пустая, если не вышло.
+
+    У находок агента суть видна из заголовка и полей источника; у итога пункта
+    заголовок говорит лишь, о чём пункт был. Эта строка ложится в запись
+    отдельным полем и потом попадает в оглавление — уже без всякой модели.
+    """
+    summary = (summary or "").strip()
+    if not summary:
+        return ""
+    try:
+        answer = await llm.ask(
+            messages=[Message.user_message(
+                f"ПУНКТ ПЛАНА: {step}\n\nЧТО ПО НЕМУ ПОЛУЧИЛОСЬ:\n{summary[:12_000]}"
+            )],
+            system_msgs=[Message.system_message(ESSENCE_SYSTEM)],
+            stream=False,
+        )
+    except Exception as error:  # без сути обойдёмся, без пункта — нет
+        logger.warning(f"Суть пункта не получена: {error}")
+        return ""
+    return " ".join(answer.split())[:300]
+
+
 def is_digest(text: str) -> bool:
     """Это уже пересказ — второй раз его сжимать незачем."""
     return text.lstrip().startswith(MARK)
