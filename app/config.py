@@ -68,6 +68,23 @@ class SearchSettings(BaseModel):
     )
 
 
+class AgentSettings(BaseModel):
+    """Пределы, зависящие от того, какая модель стоит за агентом."""
+
+    max_observe: int = Field(
+        default=60_000,
+        ge=1_000,
+        le=1_000_000,
+        description=(
+            "Сколько знаков ответа инструмента агент вообще видит. Всё, что "
+            "длиннее, обрезается ДО того, как попадёт модели: прочитать это она "
+            "уже не сможет никогда. Значение зависит от окна вашей модели: на "
+            "русском тексте примерно два знака на токен, то есть 60 000 знаков "
+            "— около 30 000 токенов на один ответ инструмента."
+        ),
+    )
+
+
 class RunflowSettings(BaseModel):
     use_data_analysis_agent: bool = Field(
         default=False, description="Enable data analysis agent in run flow"
@@ -202,6 +219,9 @@ class AppConfig(BaseModel):
     run_flow_config: Optional[RunflowSettings] = Field(
         None, description="Run flow configuration"
     )
+    agent_config: Optional[AgentSettings] = Field(
+        None, description="Agent limits that depend on the model behind it"
+    )
     daytona_config: Optional[DaytonaSettings] = Field(
         None, description="Daytona configuration"
     )
@@ -321,6 +341,9 @@ class Config:
         else:
             mcp_settings = MCPSettings(servers=MCPSettings.load_server_config())
 
+        agent_config = raw_config.get("agent")
+        agent_settings = AgentSettings(**agent_config) if agent_config else AgentSettings()
+
         run_flow_config = raw_config.get("runflow")
         if run_flow_config:
             run_flow_settings = RunflowSettings(**run_flow_config)
@@ -339,6 +362,7 @@ class Config:
             "search_config": search_settings,
             "mcp_config": mcp_settings,
             "run_flow_config": run_flow_settings,
+            "agent_config": agent_settings,
             "daytona_config": daytona_settings,
         }
 
@@ -373,6 +397,11 @@ class Config:
     def run_flow_config(self) -> RunflowSettings:
         """Get the Run Flow configuration"""
         return self._config.run_flow_config
+
+    @property
+    def agent_config(self) -> AgentSettings:
+        """Пределы агента, зависящие от модели"""
+        return self._config.agent_config
 
     @property
     def workspace_root(self) -> Path:

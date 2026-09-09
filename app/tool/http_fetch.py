@@ -33,6 +33,13 @@ from app.tool.base import BaseTool, ToolResult
 
 
 MAX_URLS = 8
+
+# С какой длины текст страницы сохраняем файлом. Короткое целиком помещается в
+# ответ, и файл был бы мусором; всё длиннее рискует не дойти до модели —
+# сначала обрезкой самого fetch, потом порогом видимости агента. Файл делает
+# эту потерю обратимой: агент дочитывает нужное место поиском по файлу через
+# python_execute, а человек может открыть источник во вкладке «Файлы».
+SAVE_TEXT_FROM = 4_000
 TIMEOUT = 25.0
 DEFAULT_MAX_CHARS = 20_000
 # больше этого в память не берём: файл уедет на диск, а агент прочитает его сам
@@ -183,6 +190,23 @@ def _extension(url: str, content_type: str) -> str:
     return Path(urlparse(url).path).suffix or ".bin"
 
 
+def _text_name(url: str) -> str:
+    """Имя файла для сохранённого текста страницы.
+
+    Собираем из хоста и пути, а не из одного имени последнего сегмента: у
+    сайтов полно страниц вида /ru/index и /en/index, и по имени «index» их не
+    различить. Расширение всегда .txt — внутри лежит текст, что бы ни было
+    написано в адресе (.aspx, .php, ничего).
+    """
+    parts = urlparse(url)
+    stem = (parts.netloc + "_" + parts.path).strip("/")
+    stem = re.sub(r"[^A-Za-z0-9_.-]+", "_", stem)
+    stem = re.sub(r"_{2,}", "_", stem).strip("_.")
+    # хвост вроде .aspx/.php к содержимому файла отношения не имеет
+    stem = re.sub(r"\.(aspx?|html?|php|jsp|cgi)$", "", stem, flags=re.IGNORECASE)
+    return (stem[:70].strip("_.") or "page") + ".txt"
+
+
 def _safe_name(url: str, content_type: str) -> str:
     stem = Path(urlparse(url).path).stem or urlparse(url).netloc.replace(".", "_")
     stem = re.sub(r"[^A-Za-z0-9_.-]", "_", stem)[:60] or "download"
@@ -199,8 +223,11 @@ class Fetch(BaseTool):
         "content. Much faster and cheaper than the browser: pass up to 8 URLs at "
         "once and they are fetched in parallel, with no page load waits.\n"
         "Understands HTML (text extraction), PDF, XLSX/XLS, CSV, JSON, XML and "
-        "plain text. Binary documents are also saved into the working directory "
-        "so python_execute can analyse them further; the saved path is reported.\n"
+        "plain text. Anything substantial is also saved into the working "
+        "directory — documents as themselves, long pages as their extracted "
+        "text — and the saved path is reported. When a page is longer than what "
+        "you are shown, read the rest by SEARCHING that file with "
+        "python_execute; do not load the whole file into the conversation.\n"
         "USE THIS FIRST for: checking whether a URL exists, reading articles, "
         "documentation, statistics releases, API endpoints, and downloading "
         "reports. Only fall back to browser_exec when the page needs JavaScript "
@@ -335,8 +362,13 @@ class Fetch(BaseTool):
         # такое не поймать — нужен отдельный разбор.
         login_wall = looks_like_login(landed, body, response.status_code)
 
-        if len(body) > max_chars:
-            body = body[:max_chars] + f"\n\n[…обрезано, всего {len(body)} символов]"
+        # Полный текст — на диск, до всякой обрезки.
+        if saved is None and len(body) >= SAVE_TEXT_FROM:
+            saved = self._save_text(landed, body)
+
+        whole = len(body)
+        if whole > max_chars:
+            body = body[:max_chars] + "\n\n" + _cut_notice(whole, max_chars, saved)
         if saved:
             head += f"\nсохранено в файл: {saved}"
         if blocked:
@@ -361,6 +393,18 @@ class Fetch(BaseTool):
         if url not in self.blocked_urls:
             self.blocked_urls.append(url)
 
+    def _save_text(self, url: str, body: str) -> Optional[str]:
+        """Кладёт разобранный текст страницы в рабочую папку задачи."""
+        try:
+            folder = Path(self.directory or config.workspace_root)
+            folder.mkdir(parents=True, exist_ok=True)
+            path = folder / _text_name(url)
+            path.write_text(body, encoding="utf-8")
+            return str(path)
+        except OSError as error:
+            logger.warning(f"fetch: не сохранил текст {url}: {error}")
+            return None
+
     def _save_if_binary(self, url: str, content_type: str, raw: bytes) -> Optional[str]:
         """Документы кладём в рабочую папку: они ещё понадобятся python_execute."""
         binary = any(
@@ -378,6 +422,23 @@ class Fetch(BaseTool):
         except OSError as error:
             logger.warning(f"fetch: не сохранил {url}: {error}")
             return None
+
+
+def _cut_notice(whole: int, shown: int, saved: Optional[str]) -> str:
+    """Обрезка обязана сказать, чего не хватает и как это дочитать.
+
+    Молчаливый обрыв — худшее из возможного: модель не знает, что видит часть,
+    и уверенно пишет отчёт по куску страницы.
+    """
+    notice = f"[…обрезано: показано {shown} знаков из {whole}."
+    if saved:
+        notice += (
+            f" Полный текст сохранён в {saved} — найдите нужное место поиском "
+            "по этому файлу через python_execute, не загружая его целиком."
+        )
+    else:
+        notice += " Чтобы прочитать больше, вызовите fetch с одним этим адресом."
+    return notice + "]"
 
 
 def _render(raw: bytes, content_type: str, url: str, encoding: Optional[str]) -> str:

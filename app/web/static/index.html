@@ -1475,6 +1475,8 @@ const SECTIONS = [
     "Какая модель думает за агента и как до неё достучаться. Если агент не отвечает — почти всегда дело здесь." },
   { id: "vision", label: "Модель зрения", note:
     "Отдельная модель, которая умеет смотреть на картинки. Нужна, чтобы агент понимал снимки страниц из браузера. Если такой модели нет — оставьте пустым, остальное будет работать." },
+  { id: "agent", label: "Агент", note:
+    "Пределы, которые зависят от того, какая модель у вас стоит. Модель с большим окном может читать источники целиком; модели с маленьким окном длинный текст просто не поместится." },
   { id: "browser", label: "Браузер", note:
     "Как агент работает с браузером. Менять стоит, только если браузерные задачи ведут себя не так, как хочется. Здесь же — кнопка стереть все входы, которые вы делали руками по просьбе агента." },
   { id: "search", label: "Поиск", note:
@@ -1571,6 +1573,12 @@ const FIELDS = {
       "Токен (Settings → Developer settings → Personal access tokens, без единого права доступа) поднимает лимит до 5000 и включает поиск по коду. " +
       "Он хранится в вашем config.toml и никуда не отправляется, кроме самого GitHub." },
   ],
+  agent: [
+    { key: "max_observe", label: "Знаков из ответа инструмента", type: "number", showDefault: true, note:
+      "Сколько знаков загруженной страницы или другого ответа инструмента агент вообще увидит. Всё, что длиннее, обрезается ДО обращения к модели — отрезанное она не прочитает никогда, и в отчёт это не попадёт. " +
+      "Считайте от окна своей модели: на русском тексте примерно два знака на токен, на английском четыре. 60 000 знаков — это около 30 000 токенов, для модели с окном в миллион это три процента. " +
+      "Для моделей с окном 8–32 тысячи ставьте 8 000–20 000. Слишком большое значение не сломает работу, но сделает каждый шаг медленнее и дороже, а очень длинный запрос модели труднее удержать целиком." },
+  ],
   runflow: [
     { key: "use_data_analysis_agent", label: "Агент анализа данных", type: "bool", note:
       "Второй агент, который умеет строить графики и отчёты по таблицам. Подключается только в режиме «План». Требует установленных библиотек для графиков." },
@@ -1581,6 +1589,13 @@ function fieldValue(section, key) {
   if (section === "vision") return ((settings.sections.llm || {}).vision || {})[key];
   if (section === "task") return sessionInfo ? sessionInfo[key] : undefined;
   return (settings.sections[section] || {})[key];
+}
+
+/* Значение, которое действует, когда в config.toml его нет. Показываем его в
+   поле только там, где пустая клетка обманывает: настройка молча работает, а
+   человек видит пустоту и думает, что она отключена. */
+function fieldDefault(section, key) {
+  return ((settings.defaults || {})[section] || {})[key];
 }
 
 function buildField(section, spec) {
@@ -1640,7 +1655,9 @@ function buildField(section, spec) {
     input = document.createElement("input");
     input.type = spec.type === "password" ? "password" : spec.type === "number" ? "number" : "text";
     if (spec.step) input.step = spec.step;
-    input.value = value === undefined || value === null ? "" : value;
+    const shown = (value === undefined || value === null) && spec.showDefault
+      ? fieldDefault(section, spec.key) : value;
+    input.value = shown === undefined || shown === null ? "" : shown;
   }
 
   input.dataset.section = section;

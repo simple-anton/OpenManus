@@ -51,7 +51,11 @@ class Manus(ToolCallAgent):
     system_prompt: str = SYSTEM_PROMPT.format(directory=config.workspace_root)
     next_step_prompt: str = NEXT_STEP_PROMPT
 
-    max_observe: int = 10000
+    # Сколько знаков ответа инструмента агент видит. Берём из настроек: предел
+    # зависит от окна модели, а оно у разных моделей отличается в сотни раз.
+    # Обрезка происходит ДО обращения к модели — отрезанное она не увидит уже
+    # никогда, поэтому душить это значение без нужды нельзя.
+    max_observe: int = Field(default_factory=lambda: config.agent_config.max_observe)
     max_steps: int = 20
 
     # MCP clients for remote tool access

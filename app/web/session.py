@@ -308,6 +308,9 @@ class Session:
                 self.agent = agent
                 self._report_mcp(agent)
             self.agent.max_steps = self.max_steps
+            # Настройки могли поменяться после создания агента — а он живёт
+            # всю задачу. Подхватываем предел видимости на каждом запуске.
+            self.agent.max_observe = config.agent_config.max_observe
             self.apply_prompt()
             return self.agent
 

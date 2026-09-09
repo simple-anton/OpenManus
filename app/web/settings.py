@@ -14,6 +14,7 @@ from typing import Any, Dict, List
 
 from app.config import (
     PROJECT_ROOT,
+    AgentSettings,
     BrowserSettings,
     LLMSettings,
     RunflowSettings,
@@ -37,6 +38,7 @@ EDITABLE_SECTIONS = (
     "search",
     "sandbox",
     "runflow",
+    "agent",
     "daytona",
     "store",
 )
@@ -95,6 +97,7 @@ def read_settings() -> Dict[str, Any]:
             "search": SearchSettings().model_dump(),
             "sandbox": SandboxSettings().model_dump(),
             "runflow": RunflowSettings().model_dump(),
+            "agent": AgentSettings().model_dump(),
         },
     }
 
@@ -123,6 +126,8 @@ def validate(sections: Dict[str, Any]) -> None:
         SandboxSettings(**sections["sandbox"])
     if sections.get("runflow"):
         RunflowSettings(**sections["runflow"])
+    if sections.get("agent"):
+        AgentSettings(**sections["agent"])
 
 
 def write_settings(sections: Dict[str, Any]) -> None:
