@@ -12,6 +12,12 @@
 источник и датой. Следующий шаг получает журнал в своей постановке задачи и
 видит и цифры, и откуда они взяты.
 
+Пишут в него с двух сторон. Поток-планировщик кладёт сюда итог каждого пункта
+сам, как только пункт закончился. Сам агент — по ходу работы, инструментом
+`record_finding`; в режиме «Агент», где плана и его пунктов нет, это
+единственный путь, и без него находки теряются, как только сотня последних
+сообщений вытеснит их из памяти агента.
+
 Формат — обычный markdown: его читает и агент, и человек во вкладке «Файлы».
 """
 
@@ -29,10 +35,14 @@ FILE_NAME = "findings.md"
 # модели — нет; при переполнении отдаём последние записи, они свежее.
 MAX_DIGEST = 12_000
 
+# Сколько знаков первой строки находки берём в заголовок записи.
+NOTE_HEADING = 90
+
 HEADER = """# Журнал находок
 
-Общая память всех шагов плана. Каждый факт — со ссылкой на источник и датой
-получения. Всё, чего здесь нет, для следующих шагов не существует.
+Общая память задачи. Каждый факт — со ссылкой на источник и датой получения.
+Всё, чего здесь нет, для дальнейшей работы не существует: разговор агента
+короче задачи, а этот файл живёт до её конца.
 """
 
 
@@ -47,14 +57,48 @@ class Ledger:
         body = (body or "").strip()
         if not body:
             return
-        stamp = datetime.now().strftime("%Y-%m-%d %H:%M")
-        entry = f"\n\n## Шаг {step_index}: {step_text}\n_записано {stamp}_\n\n{body}\n"
+        self._write(f"## Шаг {step_index}: {step_text}\n{self._stamp()}\n\n{body}\n")
+
+    def note(self, fact: str, source: str = "", dated: str = "") -> int:
+        """Дописывает отдельную находку и возвращает, сколько их стало.
+
+        Этим пишет сам агент, по ходу работы. Заголовок берём из первой строки
+        находки: журнал читает и человек, и «## Находка» двести раз подряд ему
+        ничего не скажет.
+        """
+        fact = (fact or "").strip()
+        if not fact:
+            return self.count()
+        head = fact.splitlines()[0].strip()
+        if len(head) > NOTE_HEADING:
+            head = head[:NOTE_HEADING].rstrip() + "…"
+        entry = f"## {head}\n{self._stamp()}\n\n{fact}\n"
+        if source.strip():
+            entry += f"\nИсточник: {source.strip()}\n"
+        if dated.strip():
+            entry += f"Дата источника: {dated.strip()}\n"
+        self._write(entry)
+        return self.count()
+
+    def count(self) -> int:
+        """Сколько записей уже в журнале."""
+        try:
+            return self.path.read_text(encoding="utf-8").count("\n## ")
+        except (OSError, UnicodeDecodeError):
+            return 0
+
+    @staticmethod
+    def _stamp() -> str:
+        return "_записано " + datetime.now().strftime("%Y-%m-%d %H:%M") + "_"
+
+    def _write(self, entry: str) -> None:
+        """Дописывает готовую запись в файл, заводя его при первой записи."""
         try:
             self.path.parent.mkdir(parents=True, exist_ok=True)
             if not self.path.exists():
                 self.path.write_text(HEADER, encoding="utf-8")
             with self.path.open("a", encoding="utf-8") as handle:
-                handle.write(entry)
+                handle.write("\n\n" + entry)
         except OSError as error:
             logger.warning(f"Журнал находок не записан: {error}")
 

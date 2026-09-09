@@ -1,16 +1,18 @@
 import os
-from typing import Any, Dict, List, Optional
+from typing import Any, ClassVar, Dict, List, Optional
 
 from pydantic import Field
 
 from app.agent.toolcall import ToolCallAgent
 from app.config import config
+from app.flow.ledger import Ledger
 from app.logger import logger
 from app.prompt.manus import NEXT_STEP_PROMPT, SYSTEM_PROMPT
 from app.schema import Message
 from app.tool import Terminate, ToolCollection
 from app.tool.ask_human import AskHuman
 from app.tool.http_fetch import Fetch
+from app.tool.journal import RecordFinding
 from app.tool.mcp import MCPClients, MCPClientTool
 from app.tool.python_execute import PythonExecute
 from app.tool.str_replace_editor import StrReplaceEditor
@@ -65,12 +67,25 @@ class Manus(ToolCallAgent):
             WebSearch(),
             Fetch(),
             StrReplaceEditor(),
+            # Журнал находок: единственная память задачи, переживающая и
+            # вытеснение старых сообщений, и перезапуск контейнера.
+            RecordFinding(),
             AskHuman(),
             Terminate(),
         )
     )
 
     special_tool_names: list[str] = Field(default_factory=lambda: [Terminate().name])
+
+    # Как часто возвращать в разговор хвост журнала, когда окно памяти уже
+    # вытесняет старые сообщения, — в шагах агента. Реже, чем раз в двадцать
+    # шагов, находки успевают потеряться; чаще — журнал начинает занимать в
+    # разговоре больше места, чем сама работа.
+    JOURNAL_REFRESH_EVERY: ClassVar[int] = 20
+    JOURNAL_TAIL: ClassVar[int] = 4_000
+
+    # На каком шаге журнал возвращали в разговор в прошлый раз.
+    journal_refreshed_at: int = -1
 
     # Сколько раз за шаг мы возвращаем агента к брошенному источнику. Одного
     # раза достаточно: если он и после напоминания решит не открывать браузер,
@@ -253,10 +268,47 @@ class Manus(ToolCallAgent):
             await self.disconnect_mcp_server()
             self._initialized = False
 
+    def _refresh_journal(self) -> None:
+        """Возвращает в разговор хвост журнала, когда память уже вытесняет.
+
+        Память агента — сто последних сообщений. В длинном прогоне находки
+        пятого шага к сорок пятому из неё вытеснены молча: агент не знает, что
+        забыл, и идёт добывать то же самое заново — а источник за это время мог
+        закрыться. Пока окно не переполнено, вмешиваться незачем: всё найденное
+        и так в разговоре.
+        """
+        if len(self.memory.messages) < self.memory.max_messages:
+            return
+        since = self.current_step - self.journal_refreshed_at
+        if self.journal_refreshed_at >= 0 and since < self.JOURNAL_REFRESH_EVERY:
+            return
+        tool = self.available_tools.tool_map.get("record_finding")
+        if tool is None:
+            return
+        ledger = Ledger(getattr(tool, "directory", "") or config.workspace_root)
+        body = ledger.read(self.JOURNAL_TAIL).strip()
+        if not body:
+            return
+        self.journal_refreshed_at = self.current_step
+        self.memory.add_message(
+            Message.user_message(
+                "Разговор стал длинным, и ранние сообщения из него уже "
+                "вытеснены — того, что вы нашли в начале работы, в нём больше "
+                "нет. Не собирайте это заново: вот хвост вашего журнала "
+                f"находок (файл {ledger.path}), полный файл открывается через "
+                f"str_replace_editor.\n\n{body}"
+            )
+        )
+        logger.info(
+            f"Журнал находок возвращён в разговор на шаге {self.current_step} "
+            f"({len(body)} знаков)"
+        )
+
     async def think(self) -> bool:
         """Process current state and decide next actions with appropriate context."""
         if not self._initialized:
             await self.initialize_mcp_servers()
             self._initialized = True
 
+        self._refresh_journal()
         return await super().think()

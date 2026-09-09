@@ -419,12 +419,14 @@ class PlanningFlow(BaseFlow):
            result. Ranged inputs produce ranged outputs (low/base/high), never
            a single number that hides the spread.
 
-        1. RECORD WHAT YOU FOUND. Your conversation for this step is thrown away
-           afterwards; later steps see ONLY what you write down. Append every
-           number, rate, price, date and conclusion you obtained to {where}
-           (use str_replace_editor), each with its source URL and the date the
-           source was published. A figure without a source is unusable in the
-           final report and will have to be found again.
+        1. RECORD WHAT YOU FOUND, AS YOU FIND IT. Your conversation for this
+           step is thrown away afterwards; later steps see ONLY what you write
+           down. Call `record_finding` once per fact — every number, rate,
+           price, date and conclusion you obtained, each with its source URL and
+           the date the source was published — the moment you have it, not at
+           the end of the step. It appends to {where}. A figure without a source
+           is unusable in the final report and will have to be found again; a
+           figure you never recorded is lost when this step ends.
 
         2. REPORT THE OUTCOME HONESTLY. End your summary with exactly one line:
                STEP RESULT: done      — you got what the step asked for

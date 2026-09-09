@@ -17,8 +17,9 @@ from typing import Any, AsyncIterator, Dict, List, Optional, Set
 from app.config import config
 from app.llm import LLM
 from app.logger import logger
-from app.prompt.manus import SYSTEM_PROMPT
+from app.prompt.manus import SYSTEM_PROMPT, TASK_LIST_RULES
 from app.schema import Message
+from app.tool import PlanningTool
 from app.tool.base import BaseTool
 from app.web import agent as web_agent
 from app.web import api_tools, diagnostics
@@ -130,6 +131,10 @@ class Session:
         self._loop = asyncio.get_event_loop()
         self._thread_id = threading.get_ident()
         self._carried_memory: List[Dict[str, str]] = []
+        # Список задач режима «Агент». Живёт у сессии, а не у агента: агента
+        # пересоздают при смене настроек, а список должен пережить это — он
+        # виден человеку в ленте.
+        self.planning_tool = PlanningTool()
 
         # each task gets its own folder so files from different runs do not mix
         self.workspace = WORKSPACE / f"task_{session_id}"
@@ -322,17 +327,44 @@ class Session:
         """Point the agent at this task's folder and its attached skills."""
         if self.agent is None:
             return
+        # Список задач — только в режиме «Агент», см. _use_planning.
+        solo = self.mode == "agent"
+        self._use_planning(solo)
         # Инструменты, умеющие писать файлы, должны писать в папку задачи, а
         # не в общий workspace: иначе скачанное не видно во вкладке «Файлы» и
-        # не удаляется вместе с задачей.
+        # не удаляется вместе с задачей. Журнал находок — туда же.
         for tool in self.agent.available_tools.tools:
             if "directory" in type(tool).model_fields:
                 tool.directory = str(self.workspace)
         self.agent.system_prompt = (
             SYSTEM_PROMPT.format(directory=self.workspace)
+            + (TASK_LIST_RULES if solo else "")
             + ANSWER_PROMPT
             + skills_store.prompt_for(self.skills)
         )
+
+    def _use_planning(self, enabled: bool) -> None:
+        """Даёт агенту инструмент списка задач — или забирает его.
+
+        В режиме «Агент» список ведёт сам агент: плана ему никто не пишет, и
+        без списка ни он, ни человек не видят, где находится работа.
+
+        В режиме «План» список ведёт поток-планировщик, и тот же самый агент
+        работает у него исполнителем одного пункта. Оставь инструмент ему там —
+        он завёл бы свой план поверх настоящего, перебил бы им карточку в ленте
+        и потратил бы на это действия из запаса пункта. Поэтому забираем.
+        """
+        if self.agent is None:
+            return
+        tools = [
+            tool
+            for tool in self.agent.available_tools.tools
+            if tool.name != self.planning_tool.name
+        ]
+        if enabled:
+            tools.append(self.planning_tool)
+        self.agent.available_tools.tools = tuple(tools)
+        self.agent.available_tools.tool_map = {tool.name: tool for tool in tools}
 
     def set_skills(self, slugs: List[str]) -> None:
         self.skills = [slug for slug in slugs if skills_store.read_skill(slug)]

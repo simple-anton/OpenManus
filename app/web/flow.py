@@ -6,18 +6,11 @@ they change, so this subclass publishes the plan after it is written and around
 every step it runs.
 """
 
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, Optional
 
 from app.agent.base import BaseAgent
 from app.flow.planning import PlanningFlow
-
-
-MARKS = {
-    "completed": "done",
-    "in_progress": "active",
-    "blocked": "blocked",
-    "not_started": "waiting",
-}
+from app.web import plan_view
 
 
 class WebPlanningFlow(PlanningFlow):
@@ -40,10 +33,6 @@ class WebPlanningFlow(PlanningFlow):
     def plan_state(self) -> Optional[Dict[str, Any]]:
         """The plan as the browser needs it: steps, statuses, where we are."""
         plan = getattr(self.planning_tool, "plans", {}).get(self.active_plan_id)
-        if not plan:
-            return None
-        steps: List[Dict[str, str]] = []
-        statuses = plan.get("step_statuses", [])
         # Шаг, который сам признался «сделано частично», в плане всё равно
         # помечается completed: другого статуса у планировщика нет. Но человеку
         # разница важна — иначе отчёт, собранный по наполовину закрытым пунктам,
@@ -53,18 +42,12 @@ class WebPlanningFlow(PlanningFlow):
             for record in self.step_records
             if record.get("status") == "partial"
         }
-        for index, text in enumerate(plan.get("steps", [])):
-            status = statuses[index] if index < len(statuses) else "not_started"
-            mark = MARKS.get(status, "waiting")
-            if mark == "done" and index in partial:
-                mark = "partial"
-            steps.append({"text": str(text), "status": mark})
-        return {
-            "title": plan.get("title", ""),
-            "steps": steps,
-            "active": self.current_step_index,
-            "budget": self.step_budget,
-        }
+        return plan_view.state_from(
+            plan,
+            active=self.current_step_index,
+            budget=self.step_budget,
+            partial=partial,
+        )
 
     def publish_plan(self) -> None:
         state = self.plan_state()
