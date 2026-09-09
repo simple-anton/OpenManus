@@ -23,6 +23,12 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 COPY requirements.txt .
 RUN uv pip install --system -r requirements.txt
 
+# Кэш шрифтов matplotlib строится при первом импорте и в пустом контейнере
+# занимает около 2,5 секунды — а у python_execute весь запуск ограничен по
+# времени. Строим кэш один раз при сборке образа, тогда первый график в жизни
+# контейнера обходится в те же доли секунды, что и второй.
+RUN MPLBACKEND=Agg python -c "import matplotlib.pyplot"
+
 COPY . .
 # гарантируем право на запуск: бит мог потеряться при выгрузке кода
 RUN chmod +x scripts/*.command scripts/*.sh 2>/dev/null || true

@@ -11,6 +11,52 @@ from app.llm import LLM
 from app.logger import logger
 from app.tool.base import BaseTool
 
+# Рисование через VMind — отдельная программа на TypeScript в папке src рядом.
+# Чтобы она запустилась, рядом же должны лежать её зависимости: node_modules,
+# 475 пакетов, среди них puppeteer со вторым Chromium. В этот образ они не
+# ставятся — вес и время сборки не окупаются одним инструментом. Без них
+# `npx ts-node` падает ошибкой компилятора TypeScript
+# («Cannot find name 'path'» и ещё десяток строк), по которой ни модель, ни
+# человек не догадаются, в чём дело. Поэтому проверяем заранее и отвечаем
+# словами, а заодно говорим, чем рисовать вместо этого.
+VMIND_DIR = os.path.dirname(__file__)
+
+DRAW_INSTEAD = """Постройте график сами через python_execute и matplotlib — он
+установлен в образе. Как надо:
+1. Прочитайте CSV, на который указывает csvFilePath (pandas.read_csv).
+2. `import matplotlib; matplotlib.use("Agg")` — экрана в контейнере нет.
+3. Подпишите обе оси с единицами измерения, дайте заголовок и укажите под
+   графиком источник данных и его дату.
+4. Сохраните картинку в {directory} как .png (dpi=120) и положите рядом сам
+   скрипт .py — чтобы график можно было перестроить, а не только посмотреть.
+5. Назовите в ответе полный путь к сохранённому файлу."""
+
+NO_VMIND = (
+    "Рисование через VMind в этой сборке не установлено: рядом с "
+    "chartVisualize.ts нет папки node_modules с его зависимостями Node.js.\n"
+    + DRAW_INSTEAD
+)
+
+
+def vmind_ready() -> bool:
+    """Стоят ли зависимости Node.js, без которых рисовалка не запустится."""
+    return os.path.isdir(os.path.join(VMIND_DIR, "node_modules"))
+
+
+# Сколько последних строк вывода Node оставлять в ответе. Компилятор
+# TypeScript выдаёт десятки строк подряд, и полезное в них — последние.
+NODE_TAIL = 10
+
+
+def _node_error(stderr: str, directory: str) -> str:
+    """Ошибку рисовалки — коротко и с указанием, чем рисовать вместо неё."""
+    lines = [line for line in (stderr or "").splitlines() if line.strip()]
+    tail = "\n".join(lines[-NODE_TAIL:]) or "программа ничего не сказала"
+    return (
+        f"Рисовалка VMind не отработала. Последнее, что она сказала:\n{tail}\n"
+        + DRAW_INSTEAD.format(directory=directory)
+    )
+
 
 class DataVisualization(BaseTool):
     name: str = "data_visualization"
@@ -204,6 +250,12 @@ Outputs:
         tool_type: str | None = "visualization",
         language: str | None = "en",
     ) -> str:
+        if not vmind_ready():
+            logger.warning("📈 VMind не установлен — отвечаем инструкцией")
+            return {
+                "observation": NO_VMIND.format(directory=self.output_dir),
+                "success": False,
+            }
         try:
             logger.info(f"📈 data_visualization with {json_path} in: {tool_type} ")
             with open(json_path, "r", encoding="utf-8") as file:
@@ -262,6 +314,9 @@ Outputs:
             if process.returncode == 0:
                 return json.loads(stdout_str)
             else:
-                return {"error": f"Node.js Error: {stderr_str}"}
+                return {"error": _node_error(stderr_str, self.output_dir)}
         except Exception as e:
-            return {"error": f"Subprocess Error: {str(e)}"}
+            return {
+                "error": f"Не удалось запустить рисовалку: {e}\n"
+                + DRAW_INSTEAD.format(directory=self.output_dir)
+            }

@@ -7,4 +7,10 @@ NEXT_STEP_PROMPT = """Based on user needs, break down the problem and use differ
 # Note
 1. Each step select the most appropriate tool proactively (ONLY ONE).
 2. After using each tool, clearly explain the execution results and suggest the next steps.
-3. When observation with Error, review and fix it."""
+3. When observation with Error, review and fix it.
+4. `data_visualization` needs Node.js dependencies that are NOT installed in
+   this build, and it will say so. Do not retry it and do not try to install
+   them. Draw with `python_execute` and matplotlib instead: `matplotlib.use("Agg")`
+   (there is no screen), save the .png into the workspace directory, save the
+   script beside it, label both axes with their units, and write the data
+   source and its date under the chart."""

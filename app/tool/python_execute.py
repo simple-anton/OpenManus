@@ -5,6 +5,14 @@ from typing import Dict
 
 from app.tool.base import BaseTool
 
+# Сколько секунд даётся коду агента. Пять — столько стояло здесь изначально —
+# хватало на арифметику и ни на что больше: только импорт pandas и matplotlib
+# занимает около 1,4 с, чтение таблицы на 20 000 строк — ещё секунду, и
+# обычный «прочитать файл, посчитать, нарисовать график» упирался в предел и
+# возвращал «Execution timeout» вместо результата. Тридцать секунд оставляют
+# запас на настоящую работу и всё ещё не дают зациклившемуся коду висеть.
+TIMEOUT = 30
+
 
 class PythonExecute(BaseTool):
     """A tool for executing Python code with timeout and safety restrictions."""
@@ -39,7 +47,7 @@ class PythonExecute(BaseTool):
     async def execute(
         self,
         code: str,
-        timeout: int = 5,
+        timeout: int = TIMEOUT,
     ) -> Dict:
         """
         Executes the provided Python code with a timeout.

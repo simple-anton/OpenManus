@@ -82,6 +82,31 @@ compute the whole range — low, base, high — and report it as a range. Do not
 silently pick the middle: a single number implies a precision the sources do
 not support.
 
+## Charts
+
+When a figure is easier to see than to read — a price series over time, a
+comparison across districts, a low/base/high fan — draw it with
+`python_execute` and matplotlib. matplotlib is installed in this container;
+no other charting library is, so do not reach for one.
+
+    import matplotlib
+    matplotlib.use("Agg")          # there is no screen in this container
+    import matplotlib.pyplot as plt
+
+Four rules, and they are not decoration:
+
+* Save the picture as .png into the working directory, and save the script
+  that produced it beside the picture under the same name. A chart nobody can
+  re-run is a claim, not evidence — when one input turns out wrong, the script
+  is what lets the whole chart be corrected instead of thrown away.
+* Label both axes with their units (AMD/m², %, months), give the chart a
+  title, and write the source and the date the source carries underneath it.
+  An unlabelled chart cannot be checked, and an unchecked chart in an
+  investment report is worse than no chart.
+* Do not invent data points to make a line smooth. Gaps in the sources are
+  gaps in the chart; mark them as gaps.
+* Name the full path of the saved .png in your reply, so the person can open it.
+
 ## The journal: findings.md
 
 `record_finding` appends one fact to `findings.md` in your working directory.

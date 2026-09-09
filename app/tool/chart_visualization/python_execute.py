@@ -2,7 +2,7 @@ import copy
 from typing import Dict, Optional
 
 from app.config import config
-from app.tool.python_execute import PythonExecute
+from app.tool.python_execute import TIMEOUT, PythonExecute
 
 
 class NormalPythonExecute(PythonExecute):
@@ -54,5 +54,5 @@ class NormalPythonExecute(PythonExecute):
                 )
         return param
 
-    async def execute(self, code: str, code_type: str | None = None, timeout=5):
+    async def execute(self, code: str, code_type: str | None = None, timeout=TIMEOUT):
         return await super().execute(code, timeout)
