@@ -1475,6 +1475,8 @@ const SECTIONS = [
     "Какая модель думает за агента и как до неё достучаться. Если агент не отвечает — почти всегда дело здесь." },
   { id: "vision", label: "Модель зрения", note:
     "Отдельная модель, которая умеет смотреть на картинки. Нужна, чтобы агент понимал снимки страниц из браузера. Если такой модели нет — оставьте пустым, остальное будет работать." },
+  { id: "reader", label: "Модель чтения", note:
+    "Ею пересказываются длинные ответы инструментов: страницы, документы, выдачи браузера. Оставьте пустым — читать будет основная модель. Отдельную модель здесь имеет смысл ставить более дешёвую и быструю: работа простая, но объёмная." },
   { id: "agent", label: "Агент", note:
     "Пределы, которые зависят от того, какая модель у вас стоит. Модель с большим окном может читать источники целиком; модели с маленьким окном длинный текст просто не поместится." },
   { id: "browser", label: "Браузер", note:
@@ -1573,7 +1575,20 @@ const FIELDS = {
       "Токен (Settings → Developer settings → Personal access tokens, без единого права доступа) поднимает лимит до 5000 и включает поиск по коду. " +
       "Он хранится в вашем config.toml и никуда не отправляется, кроме самого GitHub." },
   ],
+  reader: [
+    { key: "model", label: "Модель", type: "text", note:
+      "Имя модели, которая читает источники и делает выжимки. Пусто — та же, что основная." },
+    { key: "base_url", label: "Адрес API", type: "text", note: "Обычно тот же адрес, что и у основной модели." },
+    { key: "api_key", label: "Ключ API", type: "password", note: "Как и у основной модели." },
+    { key: "max_tokens", label: "Токенов в ответе", type: "number", note:
+      "Предел длины одной выжимки. 4000–8000 обычно достаточно: выжимка должна быть короче источника." },
+    { key: "temperature", label: "Температура", type: "number", step: "0.1", note:
+      "Здесь нужен ноль: пересказ не место для фантазии." },
+  ],
   agent: [
+    { key: "condense", label: "Длинные ответы пересказывать, а не обрезать", type: "bool", showDefault: true, note:
+      "Включено — всё, что не помещается в окно видимости, проходит через модель чтения целиком и возвращается выжимкой с дословными цифрами. Ничего не пропадает из поля зрения агента, но каждый длинный ответ стоит одного-двух обращений к модели чтения. " +
+      "Выключено — всё сверх порога отрезается, зато быстро и без лишних трат. Выдачи python_execute, файловых инструментов и служебные ответы не пересказываются никогда: их надо видеть дословно." },
     { key: "journal_chars", label: "Знаков журнала в постановке шага", type: "number", showDefault: true, note:
       "Журнал находок (findings.md) кладётся в задание каждого шага — это общая память всей работы. Он растёт весь прогон, и рано или поздно перестаёт помещаться. " +
       "Что не поместилось, заменяется оглавлением: агент видит заголовки ранних записей и может прочитать любую из них в файле. Ничего не теряется, но ранние находки перестают быть у него перед глазами. " +
@@ -1591,6 +1606,7 @@ const FIELDS = {
 
 function fieldValue(section, key) {
   if (section === "vision") return ((settings.sections.llm || {}).vision || {})[key];
+  if (section === "reader") return ((settings.sections.llm || {}).reader || {})[key];
   if (section === "task") return sessionInfo ? sessionInfo[key] : undefined;
   return (settings.sections[section] || {})[key];
 }
@@ -1612,7 +1628,10 @@ function buildField(section, spec) {
   if (spec.type === "bool") {
     input = document.createElement("input");
     input.type = "checkbox";
-    input.checked = Boolean(value);
+    // Настройка, включённая по умолчанию, должна показываться включённой:
+    // снятая галочка при работающем сжатии — прямая ложь про поведение.
+    input.checked = Boolean(
+      value === undefined && spec.showDefault ? fieldDefault(section, spec.key) : value);
   } else if (spec.type === "select") {
     input = document.createElement("select");
     (spec.options || []).forEach((option) => {
@@ -2493,11 +2512,14 @@ function collectSettings() {
     if (section === "task") return;  // applied separately
     const target = section === "vision"
       ? (sections.llm.vision = sections.llm.vision || {})
-      : (sections[section] = sections[section] || {});
+      : section === "reader"
+        ? (sections.llm.reader = sections.llm.reader || {})
+        : (sections[section] = sections[section] || {});
     if (value === null || value === "" || (Array.isArray(value) && !value.length)) delete target[key];
     else target[key] = value;
   });
   if (sections.llm.vision && !sections.llm.vision.model) delete sections.llm.vision;
+  if (sections.llm.reader && !sections.llm.reader.model) delete sections.llm.reader;
   return sections;
 }
 

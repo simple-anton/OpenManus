@@ -23,6 +23,7 @@
 
 from typing import Any, List
 
+from app.flow.condense import is_digest
 from app.logger import logger
 
 
@@ -100,6 +101,10 @@ def squash_old_observations(
         if message.role != "tool" or not message.content:
             continue
         if len(message.content) < min_size or message.content == STUB:
+            continue
+        # Выжимку читающей модели заглушкой не подменяем: сырья за ней уже нет,
+        # а сама она короткая — это и есть сжатая форма ответа.
+        if is_digest(message.content):
             continue
         freed += len(message.content) - len(STUB)
         message.content = STUB

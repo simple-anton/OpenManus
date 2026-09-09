@@ -5,6 +5,8 @@ from typing import Any, ClassVar, List, Optional, Union
 from pydantic import Field
 
 from app.agent.react import ReActAgent
+from app.config import config
+from app.flow import condense as condensing
 from app.flow.compaction import squash_old_observations
 from app.exceptions import TokenLimitExceeded
 from app.logger import logger
@@ -40,6 +42,69 @@ class ToolCallAgent(ReActAgent):
     # сколько раз подряд прощаем обрыв, прежде чем признать шаг потраченным
     max_truncation_retries: int = 2
     truncation_retries: int = 0
+
+    # Модель чтения: ею пересказываются длинные ответы инструментов. Ставится
+    # снаружи (веб-интерфейсом); если её нет, длинные ответы просто обрезаются.
+    reader: Any = None
+
+    # Инструменты, чей ответ пересказывать нельзя. Это не «длинный текст», а
+    # результат вычисления, содержимое файла или служебный ответ: их надо
+    # видеть дословно, и пересказ тут только вредит.
+    NEVER_CONDENSE: ClassVar[frozenset] = frozenset({
+        "python_execute", "str_replace_editor", "bash", "record_finding",
+        "terminate", "ask_human", "request_login", "planning",
+        "create_chat_completion",
+    })
+
+    async def _fit_observation(self, name: str, result: str) -> str:
+        """Укладывает ответ инструмента в окно видимости агента.
+
+        Обрезка здесь — последнее средство, а не первое: отрезанное модель не
+        прочитает уже никогда, потому что режем мы до обращения к ней. Если
+        читающая модель есть и инструмент содержательный, вместо обрезки
+        пересказываем весь ответ целиком.
+        """
+        if not self.max_observe or len(result) <= self.max_observe:
+            return result
+
+        allowed = (
+            self.reader is not None
+            and config.agent_config.condense
+            and name not in self.NEVER_CONDENSE
+            and not condensing.is_digest(result)
+            and not result.lstrip().startswith("Error")
+        )
+        if allowed:
+            try:
+                digest = await condensing.condense(
+                    self.reader,
+                    result,
+                    task=self._task_text(),
+                    budget=self.max_observe,
+                    source=", ".join(condensing.saved_files(result)),
+                )
+                logger.info(
+                    f"Ответ {name}: {len(result)} знаков пересказаны в "
+                    f"{len(digest)} вместо обрезки"
+                )
+                return digest
+            except Exception as error:  # чтение не должно ронять шаг
+                logger.warning(f"Пересказ ответа {name} не удался: {error}")
+
+        cut = result[: self.max_observe]
+        return cut + (
+            f"\n\n[…ответ инструмента обрезан: показано {self.max_observe} "
+            f"знаков из {len(result)}. Остальное модели не досталось. "
+            "Загруженные страницы и документы сохранены файлами в рабочей "
+            "папке — читайте нужное место поиском по ним через python_execute.]"
+        )
+
+    def _task_text(self) -> str:
+        """Постановка задачи — она же ориентир для читающей модели."""
+        for message in self.memory.messages:
+            if message.role == "user" and (message.content or "").strip():
+                return message.content.strip()[:1200]
+        return ""
 
     def _handle_truncation(self, content: str) -> bool:
         """Ответ модели оборвался на лимите длины и не содержит вызова инструмента."""
@@ -202,9 +267,7 @@ class ToolCallAgent(ReActAgent):
             self._current_base64_image = None
 
             result = await self.execute_tool(command)
-
-            if self.max_observe:
-                result = result[: self.max_observe]
+            result = await self._fit_observation(command.function.name, result)
 
             logger.info(
                 f"🎯 Tool '{command.function.name}' completed its mission! Result: {result}"

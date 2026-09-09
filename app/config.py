@@ -71,6 +71,14 @@ class SearchSettings(BaseModel):
 class AgentSettings(BaseModel):
     """Пределы, зависящие от того, какая модель стоит за агентом."""
 
+    condense: bool = Field(
+        default=True,
+        description=(
+            "Длинные ответы инструментов пересказывать читающей моделью, а не "
+            "обрезать. Выключено — всё сверх порога видимости отрезается."
+        ),
+    )
+
     journal_chars: int = Field(
         default=60_000,
         ge=2_000,

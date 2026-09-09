@@ -42,6 +42,11 @@ MAX_URLS = 8
 SAVE_TEXT_FROM = 4_000
 TIMEOUT = 25.0
 DEFAULT_MAX_CHARS = 20_000
+
+# Сколько берём с источника, когда длинные ответы пересказываются, а не
+# обрезаются. Резать здесь тогда незачем: полный текст всё равно пройдёт через
+# читающую модель целиком, а на диск он лёг ещё раньше.
+CONDENSED_MAX_CHARS = 300_000
 # больше этого в память не берём: файл уедет на диск, а агент прочитает его сам
 MAX_BYTES = 40 * 1024 * 1024
 
@@ -279,7 +284,7 @@ class Fetch(BaseTool):
     async def execute(
         self,
         urls: List[str],
-        max_chars: int = DEFAULT_MAX_CHARS,
+        max_chars: Optional[int] = None,
         probe_only: bool = False,
         **kwargs: Any,
     ) -> ToolResult:
@@ -289,7 +294,13 @@ class Fetch(BaseTool):
         if not urls:
             return ToolResult(error="Не передано ни одного адреса.")
 
-        max_chars = max(500, min(int(max_chars or DEFAULT_MAX_CHARS), 100_000))
+        if max_chars is None:
+            max_chars = (
+                CONDENSED_MAX_CHARS
+                if config.agent_config.condense
+                else DEFAULT_MAX_CHARS
+            )
+        max_chars = max(500, min(int(max_chars), CONDENSED_MAX_CHARS))
 
         async with httpx.AsyncClient(
             follow_redirects=True,

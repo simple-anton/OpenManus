@@ -303,6 +303,9 @@ class Session:
                 # счётчики токенов всех задач разом и делит между ними
                 # причину остановки последней генерации.
                 agent.llm = LLM.isolated()
+                # Модель чтения: ею пересказываются длинные ответы инструментов.
+                # Своя настройка [llm.reader], если её нет — та же основная.
+                agent.reader = LLM.isolated("reader")
                 self._attach_web_tools(agent)
                 self._carry_memory(agent)
                 self.agent = agent
