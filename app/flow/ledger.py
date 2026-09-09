@@ -26,14 +26,18 @@ from datetime import datetime
 from pathlib import Path
 from typing import List, Optional
 
+from app.config import config
 from app.logger import logger
 
 
 FILE_NAME = "findings.md"
 
-# Сколько знаков журнала отдавать шагу. Журнал растёт весь прогон, а контекст
-# модели — нет; при переполнении отдаём последние записи, они свежее.
-MAX_DIGEST = 12_000
+# Начало каждой записи журнала.
+ENTRY_START = re.compile(r"(?m)^## ")
+
+# Сколько заголовков опущенных записей перечислять. Это оглавление, а не
+# содержание: его дело — подсказать, что искать в файле, и самому не разрастись.
+MAX_OMITTED_LISTED = 60
 
 # Сколько знаков первой строки находки берём в заголовок записи.
 NOTE_HEADING = 90
@@ -102,17 +106,61 @@ class Ledger:
         except OSError as error:
             logger.warning(f"Журнал находок не записан: {error}")
 
-    def read(self, limit: int = MAX_DIGEST) -> str:
+    def read(self, limit: Optional[int] = None) -> str:
+        """Журнал для постановки шага: целиком, если помещается.
+
+        Если не помещается — последние записи полностью, а вместо ранних
+        оглавление их заголовков. Прежде здесь был молчаливый обрыв: агент
+        видел хвост и не знал ни что раньше что-то было, ни как это достать.
+        Оглавление стоит копейки, а превращает потерю в отсылку к файлу.
+        """
+        limit = limit or config.agent_config.journal_chars
         try:
             text = self.path.read_text(encoding="utf-8")
         except (OSError, UnicodeDecodeError):
             return ""
         if len(text) <= limit:
             return text
-        # режем по границе записи, чтобы не оборвать факт на полуслове
-        tail = text[-limit:]
-        cut = tail.find("\n## ")
-        return "[…начало журнала опущено…]\n" + (tail[cut:] if cut > 0 else tail)
+
+        starts = [match.start() for match in ENTRY_START.finditer(text)]
+        if not starts:  # файл без записей — резать по границам нечего
+            return text[-limit:]
+
+        # берём с конца столько целых записей, сколько помещается
+        cut = starts[-1]
+        for start in reversed(starts):
+            if len(text) - start > limit:
+                break
+            cut = start
+
+        tail = text[cut:]
+        if len(tail) > limit:
+            # одна запись длиннее всего окна: отдаём её конец, но честно
+            tail = "[…начало записи опущено…]\n" + tail[-limit:]
+        omitted = [start for start in starts if start < cut]
+        if not omitted:
+            return tail
+        return self._contents(text, omitted, len(starts)) + "\n\n" + tail
+
+    def _contents(self, text: str, omitted: List[int], total: int) -> str:
+        """Оглавление записей, которые в окно не поместились."""
+        listed = omitted[-MAX_OMITTED_LISTED:]
+        earlier = len(omitted) - len(listed)
+        lines = [
+            f"[В журнале {total} записей, целиком они сюда не помещаются. "
+            f"Ниже — оглавление {len(omitted)} ранних записей, а под ним полный "
+            "текст последних. Ни одна запись не потеряна: любую из оглавления "
+            f"прочитайте в файле {self.path} через str_replace_editor.]",
+            "",
+            "ОГЛАВЛЕНИЕ РАННИХ ЗАПИСЕЙ:",
+        ]
+        if earlier:
+            lines.append(f"- […и ещё {earlier} записей до перечисленных]")
+        for start in listed:
+            end = text.find("\n", start)
+            heading = (text[start:end] if end > 0 else text[start:])[3:].strip()
+            lines.append(f"- {heading}")
+        return "\n".join(lines)
 
 
 # Сколько знаков итога вообще имеет смысл класть в журнал за один шаг.
