@@ -13,6 +13,7 @@ from app.flow.ledger import (
     digest,
     outcome_of,
     ran_out_of_steps,
+    spoken,
     summarise,
 )
 from app.llm import LLM
@@ -349,10 +350,18 @@ class PlanningFlow(BaseFlow):
             await self._mark_step_completed(PlanStepStatus.BLOCKED.value)
             return f"Error executing step {self.current_step_index}: {str(e)}"
 
+        # В журнал идут слова модели, а не выдачи инструментов: то, что вернул
+        # шаг, состоит только из вторых. Если модель не сказала за шаг ни слова,
+        # выбирать не из чего — тогда сырьё лучше пустоты.
+        summary = spoken(executor) or summarise(step_result)
         # Шаг сам сообщает, чем кончился. Раньше любой шаг помечался как
         # выполненный — даже тот, чьи действия целиком упёрлись в капчу.
-        status = outcome_of(step_result)
-        self._record(step_text, step_result, status)
+        # Пометку «STEP RESULT: …» модель пишет своими словами, поэтому и
+        # исход читаем оттуда же; обрыв по пределу действий виден только в
+        # возвращённой строке, его проверяем отдельно.
+        exhausted = ran_out_of_steps(step_result)
+        status = "partial" if exhausted else outcome_of(summary)
+        self._record(step_text, summary, status, exhausted=exhausted)
         await self._mark_step_completed(
             PlanStepStatus.BLOCKED.value
             if status == "blocked"
@@ -363,15 +372,17 @@ class PlanningFlow(BaseFlow):
     def _ledger(self) -> Optional[Ledger]:
         return Ledger(self.workspace) if self.workspace else None
 
-    def _record(self, step_text: str, summary: str, status: str) -> None:
-        """Кладёт итог шага и в память потока, и в файл журнала.
+    def _record(
+        self, step_text: str, summary: str, status: str, exhausted: bool = False
+    ) -> None:
+        """Кладёт готовый итог шага и в память потока, и в файл журнала.
 
         В журнал идёт именно ИТОГ, а не вся стенограмма шага: иначе журнал
         разрастается до сотен тысяч знаков, и следующие шаги начинают тратить
         свои действия на поиск нужного места внутри него.
         """
-        short = summarise(summary)
-        if ran_out_of_steps(summary):
+        short = summary.strip()
+        if exhausted:
             # Молчание об этом опаснее самой обрывы: отчёт потом собирают по
             # пункту, который на деле не доработал.
             short = (

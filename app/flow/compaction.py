@@ -61,7 +61,7 @@ def forget_previous_step(agent: Any) -> int:
 
 
 def _reset_blocked_sources(agent: Any) -> None:
-    """Закрытые источники — забота того пункта, где они встретились.
+    """Закрытые источники и счётчики напоминаний — забота одного пункта.
 
     Без сброса источник, не поддавшийся на втором пункте, возвращал бы агента
     к себе и на пятом, где он уже не имеет отношения к делу. А проверку
@@ -72,10 +72,12 @@ def _reset_blocked_sources(agent: Any) -> None:
     fetch = getattr(tools, "tool_map", {}).get("fetch") if tools else None
     if fetch is not None and hasattr(fetch, "blocked_urls"):
         fetch.blocked_urls.clear()
-    if hasattr(agent, "blocked_nudges_left"):
-        agent.blocked_nudges_left = type(agent).model_fields[
-            "blocked_nudges_left"
-        ].default
+    # Напоминания отмеряются на пункт: исчерпанный на втором пункте счётчик
+    # молчал бы до конца плана, а каждый пункт — своя работа со своими
+    # брошенными источниками и своими незаписанными находками.
+    for field in ("blocked_nudges_left", "journal_nudges_left"):
+        if hasattr(agent, field):
+            setattr(agent, field, type(agent).model_fields[field].default)
 
 
 def squash_old_observations(

@@ -167,6 +167,42 @@ def summarise(result: str) -> str:
     return "\n\n".join(reversed(picked))
 
 
+def spoken(agent: object) -> str:
+    """Слова самой модели за этот шаг — то, что она поняла и сказала.
+
+    Почему не берём то, что вернул шаг. Строка, которую агент возвращает из
+    run(), собрана из выдач инструментов и только из них: реплики модели уходят
+    в её память отдельным сообщением и в эту строку не попадают вовсе
+    (`ToolCallAgent.act`: `return "\n\n".join(results)`, где results — ответы
+    инструментов). Поэтому в журнал вместо выводов шага попадало вот такое:
+
+        Observed output of cmd `record_finding` executed: Записано в журнал…
+        Observed output of cmd `terminate` executed: … status: success
+
+    Ноль смысла — и эти же строки потом занимали место в журнале, который
+    возвращается следующему шагу. Берём то, что модель написала сама.
+
+    Память исполнителя перед пунктом очищается, так что все реплики в ней —
+    этого шага. Набираем с конца назад: там выводы, а не планы на будущее.
+    """
+    memory = getattr(agent, "memory", None)
+    messages = getattr(memory, "messages", None) or []
+    parts = [
+        (message.content or "").strip()
+        for message in messages
+        if getattr(message, "role", "") == "assistant" and (message.content or "").strip()
+    ]
+    picked: List[str] = []
+    size = 0
+    for chunk in reversed(parts):
+        if picked and size + len(chunk) > MAX_ENTRY:
+            break
+        picked.append(chunk if len(chunk) <= MAX_ENTRY
+                      else "[…начало опущено…]\n" + chunk[-MAX_ENTRY:])
+        size += len(picked[-1])
+    return "\n\n".join(reversed(picked))
+
+
 def ran_out_of_steps(result: str) -> bool:
     """Шаг не закончился, а упёрся в предел действий."""
     return OUT_OF_STEPS in (result or "")

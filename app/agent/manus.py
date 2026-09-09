@@ -92,6 +92,24 @@ class Manus(ToolCallAgent):
     # это уже осознанный выбор, а не недосмотр. Больше — риск зациклиться.
     blocked_nudges_left: int = 1
 
+    # Сколько раз за шаг возвращаем агента, закончившего с пустым журналом.
+    journal_nudges_left: int = 1
+
+    # Писать ли итоговый ответ по журналу. Включается только там, где агент
+    # отвечает человеку сам, — в режиме «Агент». Исполнителю пункта плана это
+    # не нужно: журнал и так лежит в его постановке задачи, а лишняя выдача
+    # съела бы действие из запаса пункта.
+    answer_from_journal: bool = False
+    answer_nudges_left: int = 1
+
+    # Инструменты, которыми агент добывает данные снаружи. Если он не тронул ни
+    # один — записывать ему нечего, и напоминание про журнал будет придиркой.
+    # `python_execute` сюда намеренно не входит: сам по себе он ничего не
+    # добывает, а задачу вида «посчитай вот это» напоминание только задержало
+    # бы. Когда агент что-то посчитал по добытым данным, сработает та вещь,
+    # которой он их добыл.
+    GATHERING: ClassVar[tuple] = ("web_search", "fetch", "browser", "crawl")
+
     # Track connected MCP servers
     connected_servers: Dict[str, str] = Field(
         default_factory=dict
@@ -115,7 +133,61 @@ class Manus(ToolCallAgent):
         )
         return [url for url in blocked if url not in tried]
 
+    def _called(self, *prefixes: str) -> int:
+        """Сколько раз за этот шаг агент вызывал такие инструменты."""
+        return sum(
+            1
+            for message in self.memory.messages
+            if message.tool_calls
+            for call in message.tool_calls
+            if call.function.name.startswith(prefixes)
+        )
+
+    def _journal(self) -> Optional[Ledger]:
+        """Журнал этой задачи — там же, где его видит инструмент записи."""
+        tool = self.available_tools.tool_map.get("record_finding")
+        if tool is None:
+            return None
+        return Ledger(getattr(tool, "directory", "") or config.workspace_root)
+
+    def _nothing_recorded(self) -> bool:
+        """Агент добывал данные, но не записал за шаг ни одной находки.
+
+        Правило «записывай по ходу» живёт в подсказке, а подсказка — не
+        механизм: модель, увлёкшаяся чтением страниц, проходит десяток
+        действий без единой записи, и всё прочитанное живёт только в
+        разговоре, откуда его вытесняет окно памяти.
+        """
+        return self._called(*self.GATHERING) > 0 and self._called("record_finding") == 0
+
     async def _handle_special_tool(self, name: str, result: Any, **kwargs):
+        """Три проверки перед тем, как дать шагу закрыться.
+
+        Все три — про одно: правило в подсказке не есть механизм. Агент,
+        которому сказано «пробуй браузер», «записывай находки», «отвечай по
+        журналу», в длинном прогоне делает это через раз, и потерю замечает
+        только человек, читая отчёт без половины данных.
+
+        1. Брошенный источник — вернуть и попросить открыть браузером.
+        2. Пустой журнал — вернуть и попросить записать добытое.
+        3. Итоговый ответ — отдать журнал и попросить писать по нему.
+
+        Каждая срабатывает не более раза за шаг: если агент и после
+        напоминания решит иначе, это уже осознанный выбор, а не недосмотр.
+        """
+        if not self._is_special_tool(name):
+            await super()._handle_special_tool(name=name, result=result, **kwargs)
+            return
+
+        if self._nudge_blocked_sources():
+            return  # состояние FINISHED не выставляем, шаг продолжается
+        if self._nudge_empty_journal():
+            return
+        if self._nudge_answer_from_journal():
+            return
+        await super()._handle_special_tool(name=name, result=result, **kwargs)
+
+    def _nudge_blocked_sources(self) -> bool:
         """Не даём закрыть шаг, бросив источник непопробованным.
 
         В разобранном прогоне fetch четыре раза сказал «идите через
@@ -123,7 +195,7 @@ class Manus(ToolCallAgent):
         подменив главную доску объявлений страны пересказом из поисковой
         выдачи. Совет в тексте ответа оказался слишком слабым средством.
         """
-        if self._is_special_tool(name) and self.blocked_nudges_left > 0:
+        if self.blocked_nudges_left > 0:
             abandoned = self._abandoned_sources()
             if abandoned:
                 self.blocked_nudges_left -= 1
@@ -143,8 +215,63 @@ class Manus(ToolCallAgent):
                     f"Завершение шага отложено: {len(abandoned)} источников "
                     "закрыты и не проверены браузером"
                 )
-                return  # состояние FINISHED не выставляем, шаг продолжается
-        await super()._handle_special_tool(name=name, result=result, **kwargs)
+                return True
+        return False
+
+    def _nudge_empty_journal(self) -> bool:
+        """Не даём закрыть шаг, в котором ничего не записано.
+
+        Агент читал страницы, считал, делал выводы — и не оставил ни строчки.
+        Его разговор скоро вытеснится или будет очищен перед следующим
+        пунктом, и всё добытое исчезнет вместе с ним.
+        """
+        if self.journal_nudges_left <= 0 or not self._nothing_recorded():
+            return False
+        self.journal_nudges_left -= 1
+        self.memory.add_message(
+            Message.user_message(
+                "Шаг ещё не закончен: вы добывали данные, но не записали ни "
+                "одной находки. Всё, что вы узнали, живёт сейчас только в этом "
+                "разговоре — а он короче задачи.\n"
+                "Вызовите record_finding на каждый добытый факт: число, цену, "
+                "ставку, дату, вывод, посчитанную величину — с источником и "
+                "датой источника. Если добыть ничего не удалось, запишите "
+                "именно это: какой источник не открылся и что из-за него "
+                "осталось неизвестным. Пустая неудача тоже находка. Потом "
+                "завершайте шаг."
+            )
+        )
+        logger.info("Завершение шага отложено: за шаг не записано ни одной находки")
+        return True
+
+    def _nudge_answer_from_journal(self) -> bool:
+        """Итоговый ответ пишется по журналу, а не по памяти.
+
+        В режиме «Агент» финальный ответ рождается в том же разговоре, где
+        дословно живы лишь последние обмены: находки начала работы из него уже
+        вытеснены. Отдаём журнал перед завершением — тогда ответ опирается на
+        всё собранное, а не на то, что случайно уцелело.
+        """
+        if not self.answer_from_journal or self.answer_nudges_left <= 0:
+            return False
+        ledger = self._journal()
+        body = ledger.read().strip() if ledger else ""
+        if not body:
+            return False
+        self.answer_nudges_left -= 1
+        self.memory.add_message(
+            Message.user_message(
+                "Прежде чем закончить — вот всё, что вы записали за эту "
+                f"работу (файл {ledger.path}). Ранние находки из разговора уже "
+                "вытеснены, так что отвечайте по этому журналу, а не по "
+                "памяти.\n\n" + body + "\n\nТеперь напишите человеку итоговый "
+                "ответ обычным текстом: сам результат — числа со ссылками и "
+                "датами источников, выводы, и отдельно то, чего добыть не "
+                "удалось. После этого вызовите terminate."
+            )
+        )
+        logger.info(f"Завершение отложено: журнал ({len(body)} знаков) отдан для итога")
+        return True
 
     @classmethod
     async def create(cls, **kwargs) -> "Manus":

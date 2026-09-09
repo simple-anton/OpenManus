@@ -330,6 +330,16 @@ class Session:
         # Список задач — только в режиме «Агент», см. _use_planning.
         solo = self.mode == "agent"
         self._use_planning(solo)
+        # Итоговый ответ по журналу нужен там, где агент отвечает человеку сам.
+        # Исполнителю пункта плана журнал и так приходит в постановке задачи.
+        self.agent.answer_from_journal = solo
+        # Напоминания отмеряются на прогон, а не на всю жизнь агента: агент
+        # живёт всю задачу, а исчерпанный счётчик молчал бы и в следующих
+        # запусках. apply_prompt вызывается перед каждым, здесь и сбрасываем.
+        fields = getattr(type(self.agent), "model_fields", {})
+        for field in ("blocked_nudges_left", "journal_nudges_left", "answer_nudges_left"):
+            if field in fields:
+                setattr(self.agent, field, fields[field].default)
         # Инструменты, умеющие писать файлы, должны писать в папку задачи, а
         # не в общий workspace: иначе скачанное не видно во вкладке «Файлы» и
         # не удаляется вместе с задачей. Журнал находок — туда же.
