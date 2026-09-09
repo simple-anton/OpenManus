@@ -139,6 +139,20 @@ def _from_pdf(raw: bytes) -> str:
     return _clean("".join(pages))
 
 
+# Сколько строк таблицы показываем в ответе. Это карта, а не выгрузка: полная
+# таблица забьёт контекст, а считать по ней всё равно кодом.
+XLSX_ROWS = 8
+CSV_ROWS = 25
+
+# Карта обязана сказать, что она карта. Без этой строки агент видел двадцать
+# пять строк из пятисот и не имел ни повода, ни способа взять остальные.
+_TABLE_REST = (
+    "\n[показаны первые {shown} строк из {total}. Остальные не потеряны: "
+    "таблица целиком сохранена файлом (его имя названо выше) — считайте по "
+    "нему через python_execute, не загружая её в разговор.]"
+)
+
+
 def _from_xlsx(raw: bytes) -> str:
     """Карта книги: листы, размеры, заголовки и первые строки.
 
@@ -154,10 +168,13 @@ def _from_xlsx(raw: bytes) -> str:
     parts = [f"Листы: {book.sheetnames}"]
     for name in book.sheetnames:
         sheet = book[name]
+        shown = min(sheet.max_row or 1, XLSX_ROWS)
         parts.append(f"\n=== лист «{name}» — строк {sheet.max_row}, колонок {sheet.max_column} ===")
-        for row in sheet.iter_rows(min_row=1, max_row=min(sheet.max_row or 1, 8), values_only=True):
+        for row in sheet.iter_rows(min_row=1, max_row=shown, values_only=True):
             cells = ["" if v is None else str(v)[:28] for v in row[:16]]
             parts.append(" | ".join(cells))
+        if (sheet.max_row or 0) > shown:
+            parts.append(_TABLE_REST.format(shown=shown, total=sheet.max_row))
     return _clean("\n".join(parts))
 
 
@@ -169,8 +186,11 @@ def _from_csv(raw: bytes, encoding: Optional[str]) -> str:
     except csv.Error:
         delimiter = ","
     rows = list(csv.reader(io.StringIO(text), delimiter=delimiter))
-    head = "\n".join(" | ".join(cell[:28] for cell in row[:16]) for row in rows[:25])
-    return _clean(f"Строк: {len(rows)}, разделитель: {delimiter!r}\n{head}")
+    head = "\n".join(" | ".join(cell[:28] for cell in row[:16]) for row in rows[:CSV_ROWS])
+    body = f"Строк: {len(rows)}, разделитель: {delimiter!r}\n{head}"
+    if len(rows) > CSV_ROWS:
+        body += _TABLE_REST.format(shown=CSV_ROWS, total=len(rows))
+    return _clean(body)
 
 
 def _from_json(raw: bytes, encoding: Optional[str]) -> str:
@@ -189,6 +209,8 @@ def _extension(url: str, content_type: str) -> str:
         ("zip", ".zip"),
         ("msword", ".doc"),
         ("wordprocessing", ".docx"),
+        ("tab-separated", ".tsv"),
+        ("csv", ".csv"),
     ):
         if marker in content_type:
             return suffix
@@ -357,7 +379,7 @@ class Fetch(BaseTool):
         if len(raw) > MAX_BYTES:
             return f"{head}\nСлишком большой файл, не читаю."
 
-        saved = self._save_if_binary(landed, content_type, raw)
+        saved = self._save_source(landed, content_type, raw)
         try:
             body = _render(raw, content_type, landed, response.encoding)
         except Exception as error:  # разбор не должен ронять весь вызов
@@ -416,13 +438,24 @@ class Fetch(BaseTool):
             logger.warning(f"fetch: не сохранил текст {url}: {error}")
             return None
 
-    def _save_if_binary(self, url: str, content_type: str, raw: bytes) -> Optional[str]:
-        """Документы кладём в рабочую папку: они ещё понадобятся python_execute."""
-        binary = any(
+    def _save_source(self, url: str, content_type: str, raw: bytes) -> Optional[str]:
+        """Документы и таблицы кладём в рабочую папку как есть.
+
+        Ответ инструмента показывает по ним только карту — структуру и первые
+        строки. Всё остальное берётся отсюда, через python_execute.
+        """
+        # CSV сюда попал не сразу, и это стоило пятисот строк статистики.
+        # Он не двоичный, поэтому в список не входил; а как текст на диск не
+        # ложился, потому что после сжатия в карту из 25 строк не дотягивал до
+        # порога сохранения. Выходило, что 476 строк из 501 достать неоткуда:
+        # повторная загрузка давала ту же карту. Таблица — это данные, её
+        # место на диске независимо от того, двоичная она или текстовая.
+        data = any(
             marker in content_type
-            for marker in ("pdf", "spreadsheet", "ms-excel", "zip", "msword", "wordprocessing")
-        )
-        if not binary:
+            for marker in ("pdf", "spreadsheet", "ms-excel", "zip", "msword",
+                           "wordprocessing", "csv", "tab-separated")
+        ) or url.lower().split("?")[0].endswith((".csv", ".tsv", ".xlsx", ".xls"))
+        if not data:
             return None
         try:
             folder = Path(self.directory or config.workspace_root)

@@ -343,7 +343,8 @@ class Session:
         # живёт всю задачу, а исчерпанный счётчик молчал бы и в следующих
         # запусках. apply_prompt вызывается перед каждым, здесь и сбрасываем.
         fields = getattr(type(self.agent), "model_fields", {})
-        for field in ("blocked_nudges_left", "journal_nudges_left", "answer_nudges_left"):
+        for field in ("blocked_nudges_left", "journal_nudges_left",
+                      "answer_nudges_left", "eviction_told"):
             if field in fields:
                 setattr(self.agent, field, fields[field].default)
         # Инструменты, умеющие писать файлы, должны писать в папку задачи, а

@@ -159,24 +159,32 @@ class Message(BaseModel):
 class Memory(BaseModel):
     messages: List[Message] = Field(default_factory=list)
     max_messages: int = Field(default=100)
+    # Сколько сообщений вытеснено из окна. Само вытеснение молчаливо: агент не
+    # узнаёт, что начало разговора исчезло, и продолжает опираться на то, чего
+    # уже нет. Счётчик даёт возможность его предупредить.
+    dropped: int = Field(default=0)
+
+    def _fit(self) -> None:
+        extra = len(self.messages) - self.max_messages
+        if extra > 0:
+            self.messages = self.messages[-self.max_messages :]
+            self.dropped += extra
 
     def add_message(self, message: Message) -> None:
         """Add a message to memory"""
         self.messages.append(message)
-        # Optional: Implement message limit
-        if len(self.messages) > self.max_messages:
-            self.messages = self.messages[-self.max_messages :]
+        self._fit()
 
     def add_messages(self, messages: List[Message]) -> None:
         """Add multiple messages to memory"""
         self.messages.extend(messages)
-        # Optional: Implement message limit
-        if len(self.messages) > self.max_messages:
-            self.messages = self.messages[-self.max_messages :]
+        self._fit()
 
     def clear(self) -> None:
         """Clear all messages"""
         self.messages.clear()
+        # Осознанная очистка — не вытеснение: счётчик начинается заново.
+        self.dropped = 0
 
     def get_recent_messages(self, n: int) -> List[Message]:
         """Get n most recent messages"""
