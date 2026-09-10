@@ -735,6 +735,17 @@ class Crawl(BaseTool):
                 "type": "string",
                 "description": "(required) URL to start the crawl from.",
             },
+            "reason": {
+                "type": "string",
+                "description": (
+                    "(required) In one or two sentences, in the language the "
+                    "person is using: why a full crawl of this section is worth "
+                    "it here instead of fetching the pages you need one by one. "
+                    "The person is shown this and decides whether to allow the "
+                    "crawl or send you back to plain fetch, so tell them what "
+                    "they are deciding."
+                ),
+            },
             "max_depth": {
                 "type": "integer",
                 "description": (
@@ -750,12 +761,13 @@ class Crawl(BaseTool):
                 ),
             },
         },
-        "required": ["start_url"],
+        "required": ["start_url", "reason"],
     }
 
     async def execute(
         self,
         start_url: str,
+        reason: str = "",
         max_depth: Optional[int] = None,
         max_pages: Optional[int] = None,
         **kwargs: Any,

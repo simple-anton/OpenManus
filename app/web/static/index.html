@@ -1221,6 +1221,16 @@ function render(event) {
           ? "Вы вошли — агент продолжает работу под вашей учётной записью."
           : "Источник пропущен. Агент запишет, каких данных из-за этого не хватает."));
       break;
+    case "crawl_request":
+      openCrawlConfirm(event);
+      break;
+    case "crawl_decision":
+      closeCrawlConfirm();
+      append(card("note", "Обход сайта",
+        event.decision === "allow"
+          ? "Вы разрешили обход — агент собирает раздел целиком."
+          : "Обычная загрузка: агент читает нужные страницы по одной, без обхода."));
+      break;
     case "llm":
       exchanges.push(event.exchange);
       if (exchanges.length > 40) exchanges.shift();
@@ -1331,6 +1341,76 @@ async function loadTasks() {
 /* Удаление задачи: спрашиваем отдельно про файлы, потому что их обычно жаль,
    а иногда наоборот — в них лежит то, чего не должно остаться на диске. */
 // ── Вход на сайт под учётной записью человека ─────────────────────────────
+// Агент хочет обойти сайт по ссылкам. Спрашиваем разрешения: окно висит две
+// минуты с обратным отсчётом; если человек отошёл и не ответил, сервер сам
+// берёт обычную загрузку (Уровень 1) и присылает crawl_decision.
+let crawlLayer = null;
+let crawlTimer = null;
+
+function closeCrawlConfirm() {
+  if (crawlTimer) { clearInterval(crawlTimer); crawlTimer = null; }
+  if (crawlLayer) { crawlLayer.remove(); crawlLayer = null; }
+}
+
+async function decideCrawl(decision, buttons) {
+  buttons.forEach((b) => { b.disabled = true; });
+  try {
+    await api(`/api/sessions/${currentId}/crawl`, {
+      method: "POST", body: JSON.stringify({ decision }),
+    });
+    closeCrawlConfirm();
+  } catch (error) {
+    buttons.forEach((b) => { b.disabled = false; });
+    alert("Не получилось передать решение агенту: " + error.message);
+  }
+}
+
+function openCrawlConfirm(event) {
+  closeCrawlConfirm();
+  const layer = element("div", "ask");
+  const box = element("div", "box");
+  box.appendChild(element("h4", null, "Агент хочет обойти сайт по ссылкам"));
+  box.appendChild(element("p", null, event.reason ||
+    "Агент не объяснил, зачем ему обход."));
+  box.appendChild(element("div", "site", event.url || ""));
+  box.appendChild(element("p", null,
+    `Обход соберёт до ${event.pages} страниц на глубину ${event.depth}. ` +
+    "Тексты лягут в файлы задачи, в разговор попадёт только карта."));
+
+  const foot = element("div", "row");
+  const allow = element("button", "primary", "Разрешить обход");
+  const plain = element("button", null, "Обычная загрузка");
+  const buttons = [allow, plain];
+  allow.onclick = () => decideCrawl("allow", buttons);
+  plain.onclick = () => decideCrawl("default", buttons);
+  foot.appendChild(plain);
+  foot.appendChild(allow);
+  box.appendChild(foot);
+
+  const left = element("p", "why", "");
+  left.style.marginTop = "10px";
+  left.style.textAlign = "center";
+  box.appendChild(left);
+
+  let remaining = event.timeout || 120;
+  const tick = () => {
+    if (remaining <= 0) {
+      left.textContent = "Время вышло — берётся обычная загрузка.";
+      buttons.forEach((b) => { b.disabled = true; });
+      if (crawlTimer) { clearInterval(crawlTimer); crawlTimer = null; }
+      return;
+    }
+    left.textContent = `Если не ответить — через ${remaining} с начнётся обычная загрузка.`;
+    remaining -= 1;
+  };
+  tick();
+  crawlTimer = setInterval(tick, 1000);
+
+  layer.appendChild(box);
+  document.body.appendChild(layer);
+  crawlLayer = layer;
+}
+
 // Агент упёрся в закрытый источник и просит войти. Показываем живой вид на
 // браузер, который работает внутри контейнера: человек входит там своими
 // руками, пароль никуда не передаётся и агенту не виден.

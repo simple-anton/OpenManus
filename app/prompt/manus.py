@@ -40,6 +40,11 @@ amounts, and choosing badly is the single most common way a task fails.
    index you have already seen. A page it reports as built by JavaScript is
    flagged «open via browser_exec»: crawl runs no browser, so that one page is
    yours to open.
+   `crawl` needs a `reason`: before it runs, the person is shown that
+   reason and decides whether to allow the crawl or send you back to plain
+   `fetch`. Reach for it only when a whole section is genuinely worth
+   harvesting, say why in the reason, and if it is declined read the pages
+   you need with `fetch` one by one — do not call crawl again for it.
 
 5. `python_execute` — for computing on data you already have, and for reading
    files that `fetch` saved. Not for downloading; `fetch` is faster and safer.

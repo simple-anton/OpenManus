@@ -20,7 +20,8 @@ from app.logger import logger
 from app.prompt.manus import SYSTEM_PROMPT, TASK_LIST_RULES
 from app.schema import Message
 from app.tool import PlanningTool
-from app.tool.base import BaseTool
+from app.tool.http_fetch import CRAWL_MAX_DEPTH, CRAWL_MAX_PAGES, Crawl
+from app.tool.base import BaseTool, ToolResult
 from app.web import agent as web_agent
 from app.web import api_tools, diagnostics
 from app.web import skills as skills_store
@@ -45,6 +46,9 @@ ANSWER_TIMEOUT = 900
 # вход руками занимает больше: найти пароль, получить код из СМС, пройти
 # двухфакторную проверку. Полчаса — разумный запас.
 LOGIN_TIMEOUT = 1800
+# перед обходом сайта агент спрашивает человека; столько ждём ответа,
+# потом берётся вариант по умолчанию — обычная загрузка (Уровень 1)
+CRAWL_CONFIRM_TIMEOUT = 120
 # a planning flow may run for a while, but not forever
 FLOW_TIMEOUT = 3600
 # conversation turns carried over when a stored session is reopened
@@ -92,6 +96,42 @@ class WebAskHuman(BaseTool):
         return await self.session.ask_human(inquire)
 
 
+# Обход сайта агент запускает не сразу: сперва спрашивает человека, зачем ему
+# полный обход вместо обычной загрузки. Через веб этот вопрос показывается
+# окном; без веба (в CLI) подтверждения нет и обход идёт как обычно.
+class WebCrawl(Crawl):
+    """`crawl`, который перед запуском спрашивает разрешения у человека."""
+
+    session: Any = None
+
+    async def execute(
+        self,
+        start_url: str,
+        reason: str = "",
+        max_depth=None,
+        max_pages=None,
+        **kwargs: Any,
+    ) -> ToolResult:
+        cfg = config.agent_config
+        depth = max(1, min(int(max_depth or cfg.crawl_depth), CRAWL_MAX_DEPTH))
+        pages = max(1, min(int(max_pages or cfg.crawl_pages), CRAWL_MAX_PAGES))
+        allowed = await self.session.confirm_crawl(start_url, reason, depth, pages)
+        if not allowed:
+            return ToolResult(
+                output=(
+                    "Обход отклонён: человек выбрал обычную загрузку или не "
+                    "ответил вовремя. Не вызывайте crawl для этого раздела "
+                    "снова. Прочитайте нужные страницы обычным fetch — он "
+                    "показывает ссылки каждой страницы, идите по ним сами, "
+                    "по одной. Так задумано: обход применяют только там, где "
+                    "человек его разрешил."
+                )
+            )
+        return await super().execute(
+            start_url=start_url, max_depth=max_depth, max_pages=max_pages
+        )
+
+
 class Session:
     """One conversation with a Manus agent."""
 
@@ -122,6 +162,9 @@ class Session:
         # решение человека по просьбе войти на сайт: done или skip
         self._logins: asyncio.Queue = asyncio.Queue()
         self.pending_login: Optional[Dict[str, str]] = None
+        # решение человека по просьбе обойти сайт: allow или default
+        self._crawl_confirms: asyncio.Queue = asyncio.Queue()
+        self.pending_crawl: Optional[Dict[str, Any]] = None
         # Вкладка браузера, принадлежащая этой задаче. Браузер в контейнере
         # один на всех, и без своей вкладки задачи читают чужие страницы.
         self.browser_tab: Optional[str] = None
@@ -408,7 +451,12 @@ class Session:
         """Browser-based ask_human, plus the endpoints defined in the UI."""
         web_ask = WebAskHuman(session=self)
         login = RequestLogin(session=self)
-        replacements = {web_ask.name: web_ask, login.name: login}
+        web_crawl = WebCrawl(session=self)
+        replacements = {
+            web_ask.name: web_ask,
+            login.name: login,
+            web_crawl.name: web_crawl,
+        }
         tools = tuple(
             replacements.pop(tool.name, tool) for tool in agent.available_tools.tools
         )
@@ -537,6 +585,50 @@ class Session:
             return False
         self.publish("login_decision", decision=decision)
         self._logins.put_nowait(decision)
+        return True
+
+    async def confirm_crawl(
+        self, url: str, reason: str, depth: int, pages: int
+    ) -> bool:
+        """Агент просит обойти сайт. Ждём ответа человека CRAWL_CONFIRM_TIMEOUT
+        секунд; молчание — согласие на вариант по умолчанию (обычная загрузка)."""
+        while not self._crawl_confirms.empty():  # снимаем ответы прошлой просьбы
+            self._crawl_confirms.get_nowait()
+        self.pending_crawl = {
+            "url": url,
+            "reason": reason,
+            "depth": depth,
+            "pages": pages,
+        }
+        self.publish(
+            "crawl_request",
+            url=url,
+            reason=reason,
+            depth=depth,
+            pages=pages,
+            timeout=CRAWL_CONFIRM_TIMEOUT,
+        )
+        try:
+            decision = await asyncio.wait_for(
+                self._crawl_confirms.get(), timeout=CRAWL_CONFIRM_TIMEOUT
+            )
+        except asyncio.TimeoutError:
+            decision = "default"
+            self.publish(
+                "log",
+                level="INFO",
+                message="Никто не ответил про обход — берём обычную загрузку.",
+            )
+        finally:
+            self.pending_crawl = None
+        self.publish("crawl_decision", decision=decision)
+        return decision == "allow"
+
+    def crawl_decision(self, decision: str) -> bool:
+        """Ответ человека на просьбу обойти сайт: разрешить или обычная загрузка."""
+        if self.pending_crawl is None or decision not in ("allow", "default"):
+            return False
+        self._crawl_confirms.put_nowait(decision)
         return True
 
     def answer(self, text: str) -> bool:

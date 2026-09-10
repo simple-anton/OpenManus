@@ -105,6 +105,11 @@ class LoginDecisionRequest(BaseModel):
     decision: str
 
 
+class CrawlDecisionRequest(BaseModel):
+    # allow — разрешить обход, default — обычная загрузка (Уровень 1)
+    decision: str
+
+
 class SessionPatch(BaseModel):
     title: Optional[str] = None
     max_steps: Optional[int] = None
@@ -335,6 +340,18 @@ def create_app() -> FastAPI:
         if not session.login_decision(request.decision):
             raise HTTPException(
                 status_code=409, detail="Просьба войти сейчас не ожидается"
+            )
+        return session.info()
+
+    @app.post("/api/sessions/{session_id}/crawl")
+    async def crawl_decision(
+        session_id: str, request: CrawlDecisionRequest
+    ) -> Dict[str, Any]:
+        """Человек решает: разрешить обход сайта или обойтись обычной загрузкой."""
+        session = _get_session(session_id)
+        if not session.crawl_decision(request.decision):
+            raise HTTPException(
+                status_code=409, detail="Подтверждение обхода сейчас не ожидается"
             )
         return session.info()
 
