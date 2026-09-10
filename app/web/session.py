@@ -113,8 +113,10 @@ class WebCrawl(Crawl):
         **kwargs: Any,
     ) -> ToolResult:
         cfg = config.agent_config
-        depth = max(1, min(int(max_depth or cfg.crawl_depth), CRAWL_MAX_DEPTH))
-        pages = max(1, min(int(max_pages or cfg.crawl_pages), CRAWL_MAX_PAGES))
+        ceil_depth = min(cfg.crawl_depth, CRAWL_MAX_DEPTH)
+        ceil_pages = min(cfg.crawl_pages, CRAWL_MAX_PAGES)
+        depth = max(1, min(int(max_depth), ceil_depth) if max_depth else ceil_depth)
+        pages = max(1, min(int(max_pages), ceil_pages) if max_pages else ceil_pages)
         allowed = await self.session.confirm_crawl(start_url, reason, depth, pages)
         if not allowed:
             return ToolResult(

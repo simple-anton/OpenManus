@@ -169,22 +169,6 @@ def _links(raw: bytes, base_url: str, encoding: Optional[str]) -> List[tuple]:
     return out
 
 
-def _link_map(raw: bytes, base_url: str, encoding: Optional[str]) -> str:
-    """Готовая врезка со ссылками страницы для ответа fetch (уровень 1)."""
-    links = _links(raw, base_url, encoding)
-    if not links:
-        return ""
-    shown = links[:LINKS_SHOWN]
-    lines = [f"\nСсылки на этой странице (тот же сайт, {len(shown)} из {len(links)}):"]
-    lines += [f"  {text} -> {url}" for text, url in shown]
-    if len(links) > LINKS_SHOWN:
-        lines.append(
-            f"  [ещё {len(links) - LINKS_SHOWN} — либо откройте нужный раздел, "
-            "либо соберите его целиком инструментом crawl]"
-        )
-    return "\n".join(lines)
-
-
 def _from_pdf(raw: bytes) -> str:
     try:
         from pypdf import PdfReader
@@ -486,12 +470,57 @@ class Fetch(BaseTool):
         # не видно (потому и пометка выше).
         tail = ""
         if "html" in content_type and not script_built:
-            tail = _link_map(raw, landed, response.encoding)
+            tail = self._links_section(landed, raw, response.encoding)
         return f"{head}\n\n{body}{tail}"
 
     def _remember_blocked(self, url: str) -> None:
         if url not in self.blocked_urls:
             self.blocked_urls.append(url)
+
+    def _links_section(self, url: str, raw: bytes, encoding: Optional[str]) -> str:
+        """Врезка со ссылками страницы. Когда их больше, чем показываем, весь
+        список (текст → адрес) уходит в файл: иначе адреса дальше пятидесятого
+        достать неоткуда — в сохранённом ТЕКСТЕ страницы их нет вовсе."""
+        links = _links(raw, url, encoding)
+        if not links:
+            return ""
+        shown = links[:LINKS_SHOWN]
+        lines = [
+            f"\nСсылки на этой странице (тот же сайт, {len(shown)} из {len(links)}):"
+        ]
+        lines += [f"  {text} -> {url_}" for text, url_ in shown]
+        if len(links) > LINKS_SHOWN:
+            saved = self._save_links(url, links)
+            if saved:
+                lines.append(
+                    f"  [ещё {len(links) - LINKS_SHOWN}. ВСЕ ссылки (текст и адрес) "
+                    f"сохранены в {saved} — найдите нужный раздел поиском по этому "
+                    "файлу через python_execute. В сохранённом ТЕКСТЕ страницы "
+                    "адресов ссылок нет, ищите их только здесь. Либо соберите "
+                    "раздел целиком инструментом crawl.]"
+                )
+            else:
+                lines.append(
+                    f"  [ещё {len(links) - LINKS_SHOWN} — откройте нужный раздел "
+                    "или соберите его целиком инструментом crawl]"
+                )
+        return "\n".join(lines)
+
+    def _save_links(self, url: str, links: List[tuple]) -> Optional[str]:
+        """Кладёт полный список ссылок страницы в файл рядом с её текстом."""
+        try:
+            folder = Path(self.directory or config.workspace_root)
+            folder.mkdir(parents=True, exist_ok=True)
+            name = _text_name(url).replace(".txt", ".links.txt")
+            path = folder / name
+            path.write_text(
+                "\n".join(f"{text}\t{addr}" for text, addr in links),
+                encoding="utf-8",
+            )
+            return str(path)
+        except OSError as error:
+            logger.warning(f"fetch: не сохранил ссылки {url}: {error}")
+            return None
 
     def _save_text(self, url: str, body: str) -> Optional[str]:
         """Кладёт разобранный текст страницы в рабочую папку задачи."""
@@ -574,13 +603,19 @@ def _render(raw: bytes, content_type: str, url: str, encoding: Optional[str]) ->
 
 def _explain(error: httpx.HTTPError) -> str:
     text = str(error)
-    if isinstance(error, httpx.ConnectError) and (
-        "Name or service not known" in text or "nodename nor servname" in text
-    ):
-        return "такого домена не существует (DNS не разрешается). Адрес выдуман — не угадывайте его снова, найдите через поиск."
+    if isinstance(error, httpx.ConnectError):
+        if "Name or service not known" in text or "nodename nor servname" in text:
+            return "такого домена не существует (DNS не разрешается). Адрес выдуман — не угадывайте его снова, найдите через поиск."
+        # ConnectError часто приходит с пустым текстом — не оставляйте его пустым.
+        return (
+            "не удалось соединиться с сервером"
+            + (f" ({text})" if text.strip() else "")
+            + ". Возможно, сайт временно недоступен или требует браузера — "
+            "попробуйте browser_exec, а если и он не возьмёт, запишите пробел."
+        )
     if isinstance(error, httpx.TimeoutException):
         return "сервер не ответил за отведённое время"
-    return f"{type(error).__name__}: {text}"
+    return f"{type(error).__name__}: {text}" if text.strip() else type(error).__name__
 
 
 # Как выглядит стена входа. Держим правило узким: лучше не заметить дверь,
@@ -773,8 +808,13 @@ class Crawl(BaseTool):
         **kwargs: Any,
     ) -> ToolResult:
         cfg = config.agent_config
-        depth_cap = max(1, min(int(max_depth or cfg.crawl_depth), CRAWL_MAX_DEPTH))
-        page_cap = max(1, min(int(max_pages or cfg.crawl_pages), CRAWL_MAX_PAGES))
+        # Настройка пользователя — это ПОТОЛОК, а не значение по умолчанию:
+        # агент может попросить меньше, но не больше. Жёсткие пределы в коде —
+        # это уже потолок над потолком, на случай странной настройки.
+        ceil_depth = min(cfg.crawl_depth, CRAWL_MAX_DEPTH)
+        ceil_pages = min(cfg.crawl_pages, CRAWL_MAX_PAGES)
+        depth_cap = max(1, min(int(max_depth), ceil_depth) if max_depth else ceil_depth)
+        page_cap = max(1, min(int(max_pages), ceil_pages) if max_pages else ceil_pages)
 
         start = start_url.strip()
         if not urlparse(start).scheme:
@@ -824,9 +864,15 @@ class Crawl(BaseTool):
 
         if len(records) >= page_cap and current:
             hit_page_cap = True
+        # Стартовый адрес мог молча перенаправиться (сайт требует браузер/сессию
+        # и отдаёт главную вместо раздела). Тогда обход пойдёт по чужому меню, а
+        # не по тому разделу, что просили. Это надо назвать прямо.
+        landed_start = records[0]["url"] if records else start
+        redirected = landed_start if landed_start != start else ""
         return ToolResult(
             output=self._map(
-                start, depth_cap, page_cap, records, hit_page_cap, hit_time
+                start, landed_start, depth_cap, page_cap, records,
+                hit_page_cap, hit_time, redirected
             )
         )
 
@@ -901,15 +947,23 @@ class Crawl(BaseTool):
             "links": len(links),
         }, links
 
-    def _map(self, start, depth_cap, page_cap, records, hit_page_cap, hit_time) -> str:
+    def _map(self, start, landed_start, depth_cap, page_cap, records,
+             hit_page_cap, hit_time, redirected) -> str:
         pages = sum(1 for r in records if r["kind"] == "page")
         files = sum(1 for r in records if r.get("saved"))
         lines = [
             f"Обход {start} — глубина {depth_cap}, потолок {page_cap} страниц.",
             f"Скачано записей: {len(records)} (страниц {pages}, "
             f"сохранено файлами {files}).",
-            "",
         ]
+        if redirected:
+            lines.append(
+                f"ВНИМАНИЕ: стартовый адрес перенаправлен на {landed_start} — "
+                "раздел, похоже, не отдаётся прямым запросом (нужен browser_exec), "
+                "и обход пошёл по тому, куда перенаправило, а не по нужному "
+                "разделу. Откройте исходный адрес через browser_exec."
+            )
+        lines.append("")
         for r in records:
             mark = {
                 "page": "•",
