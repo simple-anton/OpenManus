@@ -1081,11 +1081,9 @@ function renderProgress() {
   if (runStats.seconds >= 1) parts.push(Math.round(runStats.seconds) + " с");
   if (runStats.tokens) parts.push((runStats.tokens / 1000).toFixed(1) + "k токенов");
   $("progress").textContent = parts.join(" · ");
-  $("progress").title = !planState
-    ? "Сколько шагов сделано, сколько времени заняло и сколько токенов ушло в модель"
-    : planState.budget
-      ? "Пункт плана и действие агента внутри него: у каждого пункта свой запас действий"
-      : "Пункт списка задач и действие агента: запас действий один на всю задачу";
+  $("progress").title = planState
+    ? "Пункт плана и действие агента внутри него: у каждого пункта свой запас действий"
+    : "Сколько шагов сделано, сколько времени заняло и сколько токенов ушло в модель";
 }
 
 function setState(state) {

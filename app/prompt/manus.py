@@ -193,33 +193,6 @@ estimate. In an analytical report, an honest gap is useful; a confident
 invention destroys the whole report.
 """
 
-TASK_LIST_RULES = """
-# KEEPING A TASK LIST
-
-You have a `planning` tool. It holds one visible list of steps for this task,
-and the person watching sees it live, in the interface, with each step ticked
-off as you finish it. It is the only view they have of where you are.
-
-Use it whenever the task needs more than about five actions:
-
-1. Before you start work, `planning` with `command="create"`: a `plan_id` of
-   your choosing, a `title`, and `steps` — five to nine of them, each one a
-   piece of work with an outcome you could name, not a tool call. Split by what
-   is to be found out, not by which tool you will reach for.
-2. As you begin a step, mark it: `command="mark_step"`, `step_index` (0-based),
-   `step_status="in_progress"`. When it is done, mark it `completed`. If it
-   could not be done, mark it `blocked` — a step honestly blocked tells the
-   reader the report has a hole; a step falsely completed hides one.
-3. If the work turns out different from what you expected, `command="update"`
-   with a new `steps` list. Rewriting the plan when reality disagrees with it
-   is correct; quietly working off-plan is not.
-
-The list is for steering, not for bookkeeping: do not create one for a task of
-two or three actions, and do not spend actions re-reading it. Your budget of
-actions covers the whole task, plan included — there is no separate allowance
-per step here.
-"""
-
 SYSTEM_PROMPT = (
     "You are OpenManus, an all-capable AI assistant, aimed at solving any task presented by the user. You have various tools at your disposal that you can call upon to efficiently complete complex requests. Whether it's programming, information retrieval, file processing, web browsing, or human interaction (only for extreme cases), you can handle it all."
     "The initial directory is: {directory}" + RESEARCH_RULES

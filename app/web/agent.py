@@ -21,7 +21,7 @@ from typing import Any, Dict, List, Optional
 from app.agent.manus import Manus
 from app.logger import logger
 from app.schema import ToolCall
-from app.web import browser_tabs, diagnostics, plan_view
+from app.web import browser_tabs, diagnostics
 
 
 # Screenshots live inside the container, not in the mounted workspace: they are
@@ -279,8 +279,6 @@ class WebAgentMixin:
             if tab:
                 self.session.browser_tab = tab
         failed = _looks_failed(result)
-        if name == "planning" and not failed:
-            self._publish_plan()
         if not failed and name != "terminate" and result.strip():
             # запасной итог: если модель завершит работу молча, показать это
             self.session.last_output = {"name": name, "text": _readable(result)}
@@ -304,20 +302,6 @@ class WebAgentMixin:
             diagnosis=diagnostics.tool_failure(name, result) if failed else None,
         )
         return result
-
-    def _publish_plan(self) -> None:
-        """Показывает человеку список задач, который агент только что изменил.
-
-        В режиме «План» карточку в ленте обновляет сам поток-планировщик; здесь
-        речь о режиме «Агент», где список ведёт агент своим инструментом. Карточка
-        одна и та же, поэтому и событие то же самое. Запаса действий на пункт в
-        этом режиме нет — вся работа идёт из одного общего запаса, — и `budget`
-        мы не шлём: в карточке эта строка тогда просто не появится.
-        """
-        tool = self.available_tools.tool_map.get("planning")
-        state = plan_view.state_from(plan_view.active_plan(tool))
-        if state:
-            self.session.publish("plan_state", **state)
 
     def _exchange(self) -> List[Dict[str, Any]]:
         """The tail of what the model just saw and answered, for the Model tab."""
