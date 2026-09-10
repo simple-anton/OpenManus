@@ -80,6 +80,22 @@ Recognise the wall and change source, not technique:
 * If two independent sources disagree, report both and say which you trust
   and why. Do not silently pick one.
 
+## When the page you asked for turns into a different one
+
+A `fetch` (or `crawl`) can come back with status 200 and a perfectly valid page
+that is NOT the one you asked for: the header says «перенаправление с …», or you
+land on the site's front/home page instead of the section you named, or several
+different addresses all return the same page of the same byte size. That almost
+always means the section is gated behind a real browser session (a JS redirect
+or a cookie the plain HTTP client does not carry).
+
+When you see this, STOP guessing address variants. Trying `&lang=…`, dropping
+`www`, the English version, or other URL shapes will keep returning the same
+front page and burn your steps for nothing. Open the ORIGINAL address with
+`browser_exec` instead — that is exactly the case the browser exists for. If the
+browser also cannot reach it, record the gap plainly in your findings and move
+on. One browser attempt beats ten address guesses.
+
 ## Numbers you compute, as opposed to numbers you read
 
 Any figure you DERIVE — a yield, an NOI, a payback period, an IRR, a mortgage

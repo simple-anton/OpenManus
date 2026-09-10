@@ -51,6 +51,14 @@ LOGIN_TIMEOUT = 1800
 CRAWL_CONFIRM_TIMEOUT = 120
 # a planning flow may run for a while, but not forever
 FLOW_TIMEOUT = 3600
+# Бюджет действий агента в режиме «Агент» — на всю задачу целиком. В «Плане»
+# бюджет (self.max_steps) тратится на КАЖДЫЙ пункт по отдельности, поэтому там
+# он остаётся меньше; здесь же одним числом покрывается весь путь: найти
+# источники, прочитать, посчитать, свести отчёт. Двадцати не хватало на
+# исследование с несколькими источниками — задача упиралась в предел раньше,
+# чем агент успевал перейти к браузеру или собрать вывод.
+AGENT_STEPS = 40
+
 # conversation turns carried over when a stored session is reopened
 MEMORY_KEPT = 40
 
@@ -356,7 +364,7 @@ class Session:
                 self._carry_memory(agent)
                 self.agent = agent
                 self._report_mcp(agent)
-            self.agent.max_steps = self.max_steps
+            self.agent.max_steps = self._step_budget()
             # Настройки могли поменяться после создания агента — а он живёт
             # всю задачу. Подхватываем предел видимости на каждом запуске.
             self.agent.max_observe = config.agent_config.max_observe
@@ -389,6 +397,12 @@ class Session:
                 advice="Настройки → Плагины: проверьте команду и переменные сервера. "
                 "Подробности — во вкладке «Логи».",
             )
+
+    def _step_budget(self) -> int:
+        """Сколько действий даём агенту. «Агент» — весь путь одним прогоном,
+        ему нужен больший запас (AGENT_STEPS); «План» ведёт бюджет на каждый
+        пункт по отдельности, там остаётся настройка задачи (self.max_steps)."""
+        return AGENT_STEPS if self.mode == "agent" else self.max_steps
 
     def apply_prompt(self) -> None:
         """Point the agent at this task's folder and its attached skills."""
