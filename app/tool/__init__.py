@@ -1,8 +1,7 @@
 from app.tool.base import BaseTool
 from app.tool.bash import Bash
-from app.tool.crawl4ai import Crawl4aiTool
 from app.tool.create_chat_completion import CreateChatCompletion
-from app.tool.http_fetch import Fetch
+from app.tool.http_fetch import Crawl, Fetch
 from app.tool.journal import RecordFinding
 from app.tool.planning import PlanningTool
 from app.tool.str_replace_editor import StrReplaceEditor
@@ -22,5 +21,5 @@ __all__ = [
     "CreateChatCompletion",
     "PlanningTool",
     "RecordFinding",
-    "Crawl4aiTool",
+    "Crawl",
 ]

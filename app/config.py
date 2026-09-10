@@ -99,6 +99,29 @@ class AgentSettings(BaseModel):
         ),
     )
 
+    crawl_depth: int = Field(
+        default=2,
+        ge=1,
+        le=2,
+        description=(
+            "На сколько «прыжков» по ссылкам уходит инструмент crawl вглубь "
+            "сайта. 1 — только страницы, на которые ссылается стартовая; 2 — и "
+            "их ссылки тоже. Больше двух не даём: обход разрастается взрывообразно."
+        ),
+    )
+
+    crawl_pages: int = Field(
+        default=40,
+        ge=1,
+        le=60,
+        description=(
+            "Жёсткий потолок числа страниц за один обход crawl, независимо от "
+            "глубины. Дойдя до него, обход останавливается и честно пишет об "
+            "этом в карте. Тексты страниц уходят на диск, в разговор — только "
+            "карта."
+        ),
+    )
+
     max_observe: int = Field(
         default=60_000,
         ge=1_000,
@@ -370,7 +393,9 @@ class Config:
             mcp_settings = MCPSettings(servers=MCPSettings.load_server_config())
 
         agent_config = raw_config.get("agent")
-        agent_settings = AgentSettings(**agent_config) if agent_config else AgentSettings()
+        agent_settings = (
+            AgentSettings(**agent_config) if agent_config else AgentSettings()
+        )
 
         run_flow_config = raw_config.get("runflow")
         if run_flow_config:

@@ -13,6 +13,9 @@ amounts, and choosing badly is the single most common way a task fails.
    working directory for `python_execute`.
    Pass UP TO 8 URLS IN ONE CALL — probing eight candidates costs exactly what
    probing one costs. Use that. Fetch first, always.
+   Every HTML page fetch returns ends with a list of that page's same-site
+   links as «text -> address» — that is how you pick the next page to open,
+   since the readable text alone does not carry the addresses.
 
 3. `browser_exec` — ONLY when `fetch` is not enough: the page builds itself
    with JavaScript, or you must click, type, log in or scroll. The browser is
@@ -26,7 +29,19 @@ amounts, and choosing badly is the single most common way a task fails.
    that browser belong to other tasks running at the same time, and reading
    one would put someone else's data into your findings.
 
-4. `python_execute` — for computing on data you already have, and for reading
+4. `crawl` — when you need a WHOLE known section of one site, not a single
+   page: every release under a statistics index, every page of a multi-part
+   report. It follows same-site links to a depth and returns a MAP of what it
+   collected — depth, title, size, saved file — while the page texts go to
+   disk. You then read the ones you want with `fetch`/`python_execute`; do not
+   expect the texts in the map itself. It downloads linked PDF/Excel/CSV too.
+   Do not point it at a whole domain hoping to read everything — it stops at a
+   page cap and you get breadth without relevance. Use it on a section whose
+   index you have already seen. A page it reports as built by JavaScript is
+   flagged «open via browser_exec»: crawl runs no browser, so that one page is
+   yours to open.
+
+5. `python_execute` — for computing on data you already have, and for reading
    files that `fetch` saved. Not for downloading; `fetch` is faster and safer.
 
 ## The container is not yours to repair
@@ -186,8 +201,7 @@ per step here.
 
 SYSTEM_PROMPT = (
     "You are OpenManus, an all-capable AI assistant, aimed at solving any task presented by the user. You have various tools at your disposal that you can call upon to efficiently complete complex requests. Whether it's programming, information retrieval, file processing, web browsing, or human interaction (only for extreme cases), you can handle it all."
-    "The initial directory is: {directory}"
-    + RESEARCH_RULES
+    "The initial directory is: {directory}" + RESEARCH_RULES
 )
 
 NEXT_STEP_PROMPT = """

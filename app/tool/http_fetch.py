@@ -20,7 +20,7 @@ import json
 import re
 from pathlib import Path
 from typing import Any, Dict, List, Optional
-from urllib.parse import urlparse
+from urllib.parse import urljoin, urlparse
 
 import httpx
 from bs4 import BeautifulSoup
@@ -47,6 +47,13 @@ DEFAULT_MAX_CHARS = 20_000
 # обрезаются. Резать здесь тогда незачем: полный текст всё равно пройдёт через
 # читающую модель целиком, а на диск он лёг ещё раньше.
 CONDENSED_MAX_CHARS = 300_000
+
+# Уровень 1: карта ссылок страницы. get_text() выбрасывает адреса ссылок —
+# модель видит их текст, но не видит, куда они ведут, и на быстром пути fetch
+# ходить по ним не может. Показываем их отдельным списком: только тот же хост
+# (чужие домены увели бы обход в весь интернет), без повторов, с потолком.
+LINKS_SHOWN = 50
+LINK_TEXT_MAX = 70
 # больше этого в память не берём: файл уедет на диск, а агент прочитает его сам
 MAX_BYTES = 40 * 1024 * 1024
 
@@ -122,6 +129,60 @@ def _from_html(raw: bytes, encoding: Optional[str]) -> str:
     title = soup.title.get_text(strip=True) if soup.title else ""
     body = soup.get_text("\n")
     return _clean((f"# {title}\n\n" if title else "") + body)
+
+
+def _same_host(a: str, b: str) -> bool:
+    """Один ли это хост. Сравниваем без учёта регистра и ведущего www."""
+    ha = urlparse(a).netloc.lower().removeprefix("www.")
+    hb = urlparse(b).netloc.lower().removeprefix("www.")
+    return ha == hb and bool(ha)
+
+
+def _norm_link(base: str, href: str) -> Optional[str]:
+    """Абсолютный адрес ссылки или None, если по ней не ходят.
+
+    Отсекаем якоря, mailto/tel/javascript и прочее не-HTTP; выкидываем
+    #фрагмент, чтобы одна страница с десятком якорей не считалась за десять.
+    """
+    href = (href or "").strip()
+    if not href or href.startswith("#"):
+        return None
+    absolute = urljoin(base, href)
+    parts = urlparse(absolute)
+    if parts.scheme not in ("http", "https"):
+        return None
+    return parts._replace(fragment="").geturl()
+
+
+def _links(raw: bytes, base_url: str, encoding: Optional[str]) -> List[tuple]:
+    """Ссылки того же хоста: список (текст, адрес), без повторов, по порядку."""
+    soup = BeautifulSoup(raw.decode(encoding or "utf-8", "replace"), "html.parser")
+    seen = set()
+    out = []
+    for tag in soup.find_all("a", href=True):
+        target = _norm_link(base_url, tag["href"])
+        if not target or target in seen or not _same_host(base_url, target):
+            continue
+        seen.add(target)
+        text = re.sub(r"\s+", " ", tag.get_text(" ", strip=True))[:LINK_TEXT_MAX]
+        out.append((text or "(без текста)", target))
+    return out
+
+
+def _link_map(raw: bytes, base_url: str, encoding: Optional[str]) -> str:
+    """Готовая врезка со ссылками страницы для ответа fetch (уровень 1)."""
+    links = _links(raw, base_url, encoding)
+    if not links:
+        return ""
+    shown = links[:LINKS_SHOWN]
+    lines = [f"\nСсылки на этой странице (тот же сайт, {len(shown)} из {len(links)}):"]
+    lines += [f"  {text} -> {url}" for text, url in shown]
+    if len(links) > LINKS_SHOWN:
+        lines.append(
+            f"  [ещё {len(links) - LINKS_SHOWN} — либо откройте нужный раздел, "
+            "либо соберите его целиком инструментом crawl]"
+        )
+    return "\n".join(lines)
 
 
 def _from_pdf(raw: bytes) -> str:
@@ -420,7 +481,13 @@ class Fetch(BaseTool):
                 "мало — содержимое рисуют скрипты, ниже только меню."
                 + _ESCALATE.format(url=landed)
             )
-        return f"{head}\n\n{body}"
+        # Уровень 1: карту ссылок даём только по обычным HTML-страницам —
+        # у документов и таблиц ссылок нет, а у скриптового каркаса их и так
+        # не видно (потому и пометка выше).
+        tail = ""
+        if "html" in content_type and not script_built:
+            tail = _link_map(raw, landed, response.encoding)
+        return f"{head}\n\n{body}{tail}"
 
     def _remember_blocked(self, url: str) -> None:
         if url not in self.blocked_urls:
@@ -620,3 +687,256 @@ def _looks_blocked(body: str) -> Optional[str]:
         if needle in lowered:
             return label
     return None
+
+
+# --- Уровень 2: обход сайта по ссылкам вглубь -----------------------------
+#
+# crawl идёт от стартового адреса по ссылкам того же хоста на заданную глубину
+# и возвращает КАРТУ скачанного (глубина · заголовок · размер · файл), а не
+# тексты страниц: тексты уходят на диск, в разговор — только карта. Это тот же
+# приём, что у fetch с большими таблицами, и единственная защита от того,
+# чтобы обход не завалил контекст и журнал десятками страниц.
+#
+# Пределы по умолчанию берутся из настроек агента (crawl_depth, crawl_pages),
+# но здесь стоят и глухие потолки, которые модель не может превысить.
+CRAWL_MAX_DEPTH = 2  # глубже не даём: обход разрастается взрывообразно
+CRAWL_MAX_PAGES = 60  # жёсткий предел числа страниц за один вызов
+CRAWL_LINKS_PER_PAGE = 50  # сколько ссылок берём в очередь с одной страницы
+CRAWL_CONCURRENCY = 4  # запросов разом — быстро, но не долбёжка сервера
+CRAWL_POLITE = 0.3  # пауза перед каждым запросом, секунды
+CRAWL_BUDGET = 120.0  # глухой предел на весь обход, секунды
+
+
+def _human_size(n: int) -> str:
+    return f"{n / 1024:.1f} КБ" if n >= 1024 else f"{n} Б"
+
+
+class Crawl(BaseTool):
+    """Обход сайта по ссылкам вглубь — карта, тексты на диск."""
+
+    name: str = "crawl"
+    description: str = (
+        "Crawl a site from a starting URL, following same-site links up to a "
+        "depth, and return a MAP of what was collected (depth, title, size, "
+        "saved file) — not the page texts, which are saved to the working "
+        "directory for you to read selectively with fetch/python_execute. "
+        "Use this to harvest a whole known section (e.g. every release page "
+        "under a statistics portal index) in one call instead of fetching page "
+        "by page. Links to PDF/Excel/CSV are downloaded and saved too. A page "
+        "built by JavaScript is flagged in the map with a note to open it via "
+        "browser_exec — crawl itself does not run a browser."
+    )
+    directory: str = ""
+
+    parameters: dict = {
+        "type": "object",
+        "properties": {
+            "start_url": {
+                "type": "string",
+                "description": "(required) URL to start the crawl from.",
+            },
+            "max_depth": {
+                "type": "integer",
+                "description": (
+                    "(optional) How many link hops deep to go. 1 = the start "
+                    f"page and pages it links to. Capped at {CRAWL_MAX_DEPTH}."
+                ),
+            },
+            "max_pages": {
+                "type": "integer",
+                "description": (
+                    "(optional) Hard stop on total pages fetched, regardless of "
+                    f"depth. Capped at {CRAWL_MAX_PAGES}."
+                ),
+            },
+        },
+        "required": ["start_url"],
+    }
+
+    async def execute(
+        self,
+        start_url: str,
+        max_depth: Optional[int] = None,
+        max_pages: Optional[int] = None,
+        **kwargs: Any,
+    ) -> ToolResult:
+        cfg = config.agent_config
+        depth_cap = max(1, min(int(max_depth or cfg.crawl_depth), CRAWL_MAX_DEPTH))
+        page_cap = max(1, min(int(max_pages or cfg.crawl_pages), CRAWL_MAX_PAGES))
+
+        start = start_url.strip()
+        if not urlparse(start).scheme:
+            start = "https://" + start
+        start = _norm_link(start, start) or start
+
+        saver = Fetch(directory=self.directory)
+        semaphore = asyncio.Semaphore(CRAWL_CONCURRENCY)
+        started = asyncio.get_event_loop().time()
+        visited = {start}
+        records: List[dict] = []
+        hit_page_cap = False
+        hit_time = False
+
+        async with httpx.AsyncClient(
+            follow_redirects=True, timeout=TIMEOUT, headers=HEADERS, verify=True
+        ) as client:
+            current = [start]
+            depth = 0
+            while current and len(records) < page_cap:
+                if asyncio.get_event_loop().time() - started > CRAWL_BUDGET:
+                    hit_time = True
+                    break
+                room = page_cap - len(records)
+                batch = current[:room]
+                if len(current) > room:
+                    hit_page_cap = True
+                pairs = await asyncio.gather(
+                    *(self._page(client, saver, semaphore, url, depth) for url in batch)
+                )
+                for record, _ in pairs:
+                    records.append(record)
+
+                if depth >= depth_cap:
+                    if any(links for _, links in pairs):
+                        # ссылки со следующего уровня есть, но глубже не идём
+                        pass
+                    break
+                nxt: List[str] = []
+                for _, links in pairs:
+                    for _text, target in links[:CRAWL_LINKS_PER_PAGE]:
+                        if target not in visited:
+                            visited.add(target)
+                            nxt.append(target)
+                current = nxt
+                depth += 1
+
+        if len(records) >= page_cap and current:
+            hit_page_cap = True
+        return ToolResult(
+            output=self._map(
+                start, depth_cap, page_cap, records, hit_page_cap, hit_time
+            )
+        )
+
+    async def _page(self, client, saver, semaphore, url, depth):
+        """Скачивает одну страницу: запись для карты + её ссылки для очереди."""
+        async with semaphore:
+            await asyncio.sleep(CRAWL_POLITE)  # вежливость к серверу
+            try:
+                response = await client.get(url)
+            except httpx.HTTPError as error:
+                return {
+                    "depth": depth,
+                    "url": url,
+                    "kind": "error",
+                    "note": _explain(error),
+                }, []
+
+        content_type = (response.headers.get("content-type") or "").lower()
+        raw = response.content
+        landed = str(response.url)
+        if response.status_code >= 400:
+            return {
+                "depth": depth,
+                "url": landed,
+                "kind": "error",
+                "note": f"код {response.status_code}",
+            }, []
+        if len(raw) > MAX_BYTES:
+            return {
+                "depth": depth,
+                "url": landed,
+                "kind": "big",
+                "note": f"{_human_size(len(raw))} — слишком большой, пропущен",
+            }, []
+
+        try:
+            body = _render(raw, content_type, landed, response.encoding)
+        except Exception as error:  # разбор не должен ронять весь обход
+            body = f"[содержимое не разобрано: {error}]"
+
+        saved = saver._save_source(landed, content_type, raw)
+        is_html = "html" in content_type or "xhtml" in content_type
+        if saved is None and is_html:
+            saved = saver._save_text(landed, body)  # в обходе сохраняем и короткие
+
+        title = ""
+        if is_html:
+            spot = body.find("\n")
+            first = body[: spot if spot > 0 else 80].lstrip("# ").strip()
+            title = first[:80]
+
+        script_built = _looks_script_built(raw, body, content_type)
+        if script_built:
+            return {"depth": depth, "url": landed, "kind": "script", "saved": saved}, []
+        if not is_html:
+            return {
+                "depth": depth,
+                "url": landed,
+                "kind": "data",
+                "saved": saved,
+                "size": len(raw),
+            }, []
+
+        links = _links(raw, landed, response.encoding)
+        return {
+            "depth": depth,
+            "url": landed,
+            "kind": "page",
+            "title": title,
+            "saved": saved,
+            "size": len(body),
+            "links": len(links),
+        }, links
+
+    def _map(self, start, depth_cap, page_cap, records, hit_page_cap, hit_time) -> str:
+        pages = sum(1 for r in records if r["kind"] == "page")
+        files = sum(1 for r in records if r.get("saved"))
+        lines = [
+            f"Обход {start} — глубина {depth_cap}, потолок {page_cap} страниц.",
+            f"Скачано записей: {len(records)} (страниц {pages}, "
+            f"сохранено файлами {files}).",
+            "",
+        ]
+        for r in records:
+            mark = {
+                "page": "•",
+                "data": "▣",
+                "script": "⚠",
+                "error": "✖",
+                "big": "✖",
+            }.get(r["kind"], "•")
+            head = f"  {mark} [{r['depth']}] "
+            if r["kind"] == "page":
+                head += f"{r.get('title') or '(без заголовка)'} — {_human_size(r.get('size', 0))}"
+                if r.get("links"):
+                    head += f", ссылок {r['links']}"
+            elif r["kind"] == "data":
+                head += f"файл {Path(urlparse(r['url']).path).name} — {_human_size(r.get('size', 0))}"
+            elif r["kind"] == "script":
+                head += (
+                    f"{r['url']} — похоже, собрана скриптом, ссылок не видно. "
+                    "Откройте эту страницу через browser_exec."
+                )
+            else:
+                head += f"{r['url']} — {r.get('note', 'не открылась')}"
+            if r["kind"] in ("page", "data"):
+                head += f"\n      источник: {r['url']}"
+                if r.get("saved"):
+                    head += f"\n      файл: {r['saved']}"
+            lines.append(head)
+
+        lines.append("")
+        if hit_page_cap:
+            lines.append(
+                f"Достигнут потолок в {page_cap} страниц — обход остановлен, "
+                "часть ссылок не пройдена. Позовите crawl на нужный раздел "
+                "отдельно или поднимите потолок в настройках."
+            )
+        if hit_time:
+            lines.append(f"Остановлено по времени ({int(CRAWL_BUDGET)} с).")
+        lines.append(
+            "[Тексты страниц на диске — читайте нужные через fetch или "
+            "python_execute, целиком в разговор не грузите.]"
+        )
+        return "\n".join(lines)

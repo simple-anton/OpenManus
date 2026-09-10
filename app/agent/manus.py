@@ -11,7 +11,7 @@ from app.prompt.manus import NEXT_STEP_PROMPT, SYSTEM_PROMPT
 from app.schema import Message
 from app.tool import Terminate, ToolCollection
 from app.tool.ask_human import AskHuman
-from app.tool.http_fetch import Fetch
+from app.tool.http_fetch import Crawl, Fetch
 from app.tool.journal import RecordFinding
 from app.tool.mcp import MCPClients, MCPClientTool
 from app.tool.python_execute import PythonExecute
@@ -70,6 +70,9 @@ class Manus(ToolCallAgent):
             # антибот останавливает работу целиком.
             WebSearch(),
             Fetch(),
+            # Обход сайта по ссылкам вглубь: карта скачанного,
+            # тексты — на диск. См. app/tool/http_fetch.py.
+            Crawl(),
             StrReplaceEditor(),
             # Журнал находок: единственная память задачи, переживающая и
             # вытеснение старых сообщений, и перезапуск контейнера.
@@ -212,7 +215,7 @@ class Manus(ToolCallAgent):
                         "Шаг ещё не закончен. Эти источники прямым запросом не "
                         f"открылись, и браузер к ним не применялся:\n{listed}\n"
                         "Откройте их через browser_exec — new_tab(адрес), "
-                        "wait_for_load(), затем js(\"document.body.innerText\"). "
+                        'wait_for_load(), затем js("document.body.innerText"). '
                         "Если браузер тоже не справится, запишите это в находки "
                         "и тогда завершайте шаг. Данные из первоисточника "
                         "весомее пересказа поисковой выдачи."
@@ -425,9 +428,7 @@ class Manus(ToolCallAgent):
                 "из памяти."
             )
         )
-        logger.info(
-            f"Агент предупреждён о вытеснении: {self.memory.dropped} сообщений"
-        )
+        logger.info(f"Агент предупреждён о вытеснении: {self.memory.dropped} сообщений")
 
     def _refresh_journal(self) -> None:
         """Возвращает в разговор хвост журнала, когда память уже вытесняет.
