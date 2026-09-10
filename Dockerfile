@@ -21,6 +21,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # requirements.txt itself changes, so editing the code no longer reinstalls
 # forty packages on every build.
 COPY requirements.txt .
+# Запас времени на скачивание: по умолчанию uv рвёт загрузку через 30 секунд,
+# и на медленной сети крупный пакет не успевает. 120 секунд — с запасом.
+ENV UV_HTTP_TIMEOUT=120
 RUN uv pip install --system -r requirements.txt
 
 # Кэш шрифтов matplotlib строится при первом импорте и в пустом контейнере

@@ -4,15 +4,15 @@ tenacity~=9.0.0
 pyyaml~=6.0.2
 loguru~=0.7.3
 structlog>=24.1.0,<26.0.0
+# numpy нужен pandas и matplotlib. Тяжёлый ML-груз (browsergym, gymnasium,
+# datasets, huggingface-hub) убран: он тянул torch и весь набор NVIDIA CUDA
+# на несколько гигабайт, а в коде не использовался ничем.
 numpy
-datasets~=3.4.1
 fastapi~=0.115.11
 tiktoken~=0.9.0
 
 html2text~=2024.2.26
-gymnasium~=1.1.1
 pillow>=10.4,<11
-browsergym~=0.13.3
 uvicorn~=0.34.0
 unidiff~=0.7.5
 uv>=0.6.0
@@ -50,5 +50,4 @@ openpyxl~=3.1
 pandas>=2.2
 matplotlib>=3.8
 
-huggingface-hub~=0.29.2
 setuptools~=75.8.0
