@@ -51,14 +51,6 @@ LOGIN_TIMEOUT = 1800
 CRAWL_CONFIRM_TIMEOUT = 120
 # a planning flow may run for a while, but not forever
 FLOW_TIMEOUT = 3600
-# Бюджет действий агента в режиме «Агент» — на всю задачу целиком. В «Плане»
-# бюджет (self.max_steps) тратится на КАЖДЫЙ пункт по отдельности, поэтому там
-# он остаётся меньше; здесь же одним числом покрывается весь путь: найти
-# источники, прочитать, посчитать, свести отчёт. Двадцати не хватало на
-# исследование с несколькими источниками — задача упиралась в предел раньше,
-# чем агент успевал перейти к браузеру или собрать вывод.
-AGENT_STEPS = 40
-
 # conversation turns carried over when a stored session is reopened
 MEMORY_KEPT = 40
 
@@ -150,7 +142,7 @@ class Session:
         session_id: str,
         title: str = "Новая задача",
         created_at: Optional[float] = None,
-        max_steps: int = 20,
+        max_steps: Optional[int] = None,
         skills: Optional[List[str]] = None,
     ):
         self.id = session_id
@@ -264,7 +256,7 @@ class Session:
                     meta["id"],
                     title=meta.get("title", "Задача"),
                     created_at=meta.get("created_at"),
-                    max_steps=meta.get("max_steps", 20),
+                    max_steps=meta.get("max_steps"),
                     skills=meta.get("skills", []),
                 )
                 session._load_events(folder / "events.jsonl")
@@ -399,10 +391,14 @@ class Session:
             )
 
     def _step_budget(self) -> int:
-        """Сколько действий даём агенту. «Агент» — весь путь одним прогоном,
-        ему нужен больший запас (AGENT_STEPS); «План» ведёт бюджет на каждый
-        пункт по отдельности, там остаётся настройка задачи (self.max_steps)."""
-        return AGENT_STEPS if self.mode == "agent" else self.max_steps
+        """Сколько действий даём агенту, по настройкам раздела «Агент».
+        «Агент» — весь путь одним прогоном (steps_agent); «План» ведёт бюджет
+        на каждый пункт по отдельности (steps_plan). Предел, заданный для
+        конкретной задачи (max_steps), важнее обеих настроек."""
+        if self.max_steps:  # человек задал предел именно для этой задачи
+            return self.max_steps
+        cfg = config.agent_config
+        return cfg.steps_agent if self.mode == "agent" else cfg.steps_plan
 
     def apply_prompt(self) -> None:
         """Point the agent at this task's folder and its attached skills."""
@@ -767,7 +763,7 @@ class Session:
                 )
             else:
                 analyst.llm = LLM.isolated()
-                analyst.max_steps = self.max_steps
+                analyst.max_steps = self.max_steps or config.agent_config.steps_plan
                 # the analyst has its own prompt; the task's skills apply to it too
                 analyst.system_prompt += skills_store.prompt_for(self.skills)
                 agents["data_analysis"] = analyst
@@ -783,7 +779,7 @@ class Session:
             # планировщик тоже считает токены — и тоже своим счётчиком
             llm=LLM.isolated(),
             planning_context=skills_store.planning_prompt_for(self.skills),
-            step_budget=self.max_steps,
+            step_budget=self.max_steps or config.agent_config.steps_plan,
             # журнал находок ложится в папку задачи: это общая память шагов
             workspace=str(self.workspace),
         )
