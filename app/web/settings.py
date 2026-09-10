@@ -39,7 +39,6 @@ EDITABLE_SECTIONS = (
     "sandbox",
     "runflow",
     "agent",
-    "daytona",
     "store",
 )
 

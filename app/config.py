@@ -181,28 +181,6 @@ class SandboxSettings(BaseModel):
     )
 
 
-class DaytonaSettings(BaseModel):
-    daytona_api_key: str = Field(
-        "",
-        description="Daytona API key. Only required when running the sandbox agent",
-    )
-    daytona_server_url: Optional[str] = Field(
-        "https://app.daytona.io/api", description=""
-    )
-    daytona_target: Optional[str] = Field("us", description="enum ['eu', 'us']")
-    sandbox_image_name: Optional[str] = Field("whitezxj/sandbox:0.1.0", description="")
-    sandbox_entrypoint: Optional[str] = Field(
-        "/usr/bin/supervisord -n -c /etc/supervisor/conf.d/supervisord.conf",
-        description="",
-    )
-    # sandbox_id: Optional[str] = Field(
-    #     None, description="ID of the daytona sandbox to use, if any"
-    # )
-    VNC_password: Optional[str] = Field(
-        "123456", description="VNC password for the vnc service in sandbox"
-    )
-
-
 class MCPServerConfig(BaseModel):
     """Configuration for a single MCP server"""
 
@@ -272,9 +250,6 @@ class AppConfig(BaseModel):
     )
     agent_config: Optional[AgentSettings] = Field(
         None, description="Agent limits that depend on the model behind it"
-    )
-    daytona_config: Optional[DaytonaSettings] = Field(
-        None, description="Daytona configuration"
     )
 
     class Config:
@@ -377,11 +352,6 @@ class Config:
             sandbox_settings = SandboxSettings(**sandbox_config)
         else:
             sandbox_settings = SandboxSettings()
-        daytona_config = raw_config.get("daytona", {})
-        if daytona_config:
-            daytona_settings = DaytonaSettings(**daytona_config)
-        else:
-            daytona_settings = DaytonaSettings()
 
         mcp_config = raw_config.get("mcp", {})
         mcp_settings = None
@@ -416,7 +386,6 @@ class Config:
             "mcp_config": mcp_settings,
             "run_flow_config": run_flow_settings,
             "agent_config": agent_settings,
-            "daytona_config": daytona_settings,
         }
 
         self._config = AppConfig(**config_dict)
@@ -428,10 +397,6 @@ class Config:
     @property
     def sandbox(self) -> SandboxSettings:
         return self._config.sandbox
-
-    @property
-    def daytona(self) -> DaytonaSettings:
-        return self._config.daytona_config
 
     @property
     def browser_config(self) -> Optional[BrowserSettings]:
