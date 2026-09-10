@@ -140,7 +140,6 @@ def write_settings(sections: Dict[str, Any]) -> None:
                 raw[name] = value
             else:
                 raw.pop(name, None)
-    raw.setdefault("mcp", {"server_reference": "app.mcp.server"})
 
     CONFIG_PATH.parent.mkdir(parents=True, exist_ok=True)
     CONFIG_PATH.write_text(dumps(raw), encoding="utf-8")

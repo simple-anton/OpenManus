@@ -241,11 +241,6 @@ edit `config/config.toml` without entering the container. A model server
 running on the host machine (Ollama, LM Studio, ...) is reachable from inside
 the container as `http://host.docker.internal:11434/v1`.
 
-For MCP tool version, you can run:
-```bash
-python run_mcp.py
-```
-
 For unstable multi-agent version, you also can run:
 
 ```bash

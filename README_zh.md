@@ -127,11 +127,6 @@ python main.py
 
 然后通过终端输入你的创意！
 
-如需使用 MCP 工具版本，可运行：
-```bash
-python run_mcp.py
-```
-
 如需体验不稳定的多智能体版本，可运行：
 
 ```bash

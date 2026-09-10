@@ -104,10 +104,6 @@ daytona_api_key = ""
 #sandbox_entrypoint = "/usr/bin/supervisord -n -c /etc/supervisor/conf.d/supervisord.conf"   #If you change this entrypoint,server in sandbox may be useless
 #VNC_password =                                          #The password you set to log in sandbox by VNC,it will be 123456 if you don't set
 
-# MCP (Model Context Protocol) configuration
-[mcp]
-server_reference = "app.mcp.server" # default server module reference
-
 # Optional Runflow configuration
 # Your can add additional agents into run-flow workflow to solve different-type tasks.
 [runflow]
