@@ -491,7 +491,6 @@
           файлами, GitHub, Slack. Добавляются в один клик из каталога.</li>
           <li><b>Свои API</b> — описываете чужой или свой HTTP-сервис, и агент получает его как
           инструмент.</li>
-          <li><b>Текущая задача</b> — предел шагов для этой задачи.</li>
         </ul>
         <p>Настройки применяются со следующего запуска задачи, перезапускать ничего не нужно.</p>
       </div>
@@ -1577,8 +1576,6 @@ const SECTIONS = [
     "Готовые наборы инструментов: загрузка страниц, работа с файлами, GitHub, Slack. Подключаются к агенту при следующем запуске задачи." },
   { id: "apitools", label: "Свои API", note:
     "Опишите HTTP-сервис — и агент сможет его вызывать так же, как встроенные инструменты." },
-  { id: "task", label: "Текущая задача", note:
-    "Настройки только этой задачи, на остальные не влияют." },
 ];
 
 const FIELDS = {
@@ -1698,7 +1695,6 @@ const FIELDS = {
 function fieldValue(section, key) {
   if (section === "vision") return ((settings.sections.llm || {}).vision || {})[key];
   if (section === "reader") return ((settings.sections.llm || {}).reader || {})[key];
-  if (section === "task") return sessionInfo ? sessionInfo[key] : undefined;
   return (settings.sections[section] || {})[key];
 }
 
@@ -1800,7 +1796,6 @@ function renderDialog() {
   if (dialogSection === "mcp") return renderMcpSection(form);
   if (dialogSection === "skills") return renderSkillsSection(form);
   if (dialogSection === "apitools") return renderApiToolsSection(form);
-  if (dialogSection === "task") return renderTaskSection(form);
 
   const section = SECTIONS.find((item) => item.id === dialogSection);
   form.appendChild(element("div", "section-title", section.label));
@@ -1838,27 +1833,6 @@ function appendForgetLogins(form) {
   form.appendChild(wrap);
 }
 
-function renderTaskSection(form) {
-  form.appendChild(element("div", "section-title", "Текущая задача"));
-  form.appendChild(element("div", "section-note", SECTIONS.find((item) => item.id === "task").note));
-  if (!sessionInfo) {
-    form.appendChild(element("div", "note", "Сначала создайте задачу"));
-    return;
-  }
-  form.appendChild(buildField("task", {
-    key: "max_steps", label: "Максимум действий (только для этой задачи)", type: "number",
-    note: "Необязательное переопределение для одной этой задачи. Пусто — берётся значение из настроек по режиму: " +
-      "«Шагов в режиме Агент» или «Шагов на пункт в режиме План» (раздел «Агент»). Задайте число, чтобы переопределить " +
-      "именно здесь. Одно действие — одно обращение к модели и один вызов инструмента; дойдя до предела, агент " +
-      "останавливается и сообщает об этом.",
-  }));
-  const info = element("div", "field");
-  info.appendChild(element("label", null, "Папка задачи"));
-  const control = element("div", "control");
-  control.appendChild(element("div", "note", sessionInfo.workspace));
-  info.appendChild(control);
-  form.appendChild(info);
-}
 
 function renderPresetsSection(form) {
   form.appendChild(element("div", "section-title", "Быстрые задачи"));
@@ -2601,7 +2575,6 @@ function collectSettings() {
     else if (kind === "list") value = input.value.split(",").map((s) => s.trim()).filter(Boolean);
     else value = input.value;
 
-    if (section === "task") return;  // applied separately
     const target = section === "vision"
       ? (sections.llm.vision = sections.llm.vision || {})
       : section === "reader"
@@ -2677,12 +2650,6 @@ async function saveSettings() {
       });
       apiTools = result.tools;
       dialogStatus("Сохранено. Инструменты появятся у агента со следующего запуска", "ok");
-    } else if (dialogSection === "task") {
-      const input = document.querySelector('#dialog-form [data-key="max_steps"]');
-      sessionInfo = await api("/api/sessions/" + currentId, {
-        method: "PATCH", body: JSON.stringify({ max_steps: Number(input.value) }),
-      });
-      dialogStatus("Настройки задачи применены", "ok");
     } else {
       const sections = collectSettings();
       const result = await api("/api/settings", { method: "POST", body: JSON.stringify({ sections: sections }) });

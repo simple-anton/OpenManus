@@ -112,7 +112,6 @@ class CrawlDecisionRequest(BaseModel):
 
 class SessionPatch(BaseModel):
     title: Optional[str] = None
-    max_steps: Optional[int] = None
     skills: Optional[List[str]] = None
 
 
@@ -297,10 +296,6 @@ def create_app() -> FastAPI:
         session = _get_session(session_id)
         if patch.title is not None:
             session.title = patch.title.strip()[:80] or session.title
-        if patch.max_steps is not None:
-            session.max_steps = max(1, min(patch.max_steps, 100))
-            if session.agent is not None:
-                session.agent.max_steps = session.max_steps
         if patch.skills is not None:
             session.set_skills(patch.skills)
         session._save_meta()

@@ -142,13 +142,11 @@ class Session:
         session_id: str,
         title: str = "Новая задача",
         created_at: Optional[float] = None,
-        max_steps: Optional[int] = None,
         skills: Optional[List[str]] = None,
     ):
         self.id = session_id
         self.title = title
         self.created_at = created_at or time.time()
-        self.max_steps = max_steps
         self.skills: List[str] = list(skills or [])
         self.agent: Optional[WebManus] = None
         self.task: Optional[asyncio.Task] = None
@@ -204,7 +202,6 @@ class Session:
                         "id": self.id,
                         "title": self.title,
                         "created_at": self.created_at,
-                        "max_steps": self.max_steps,
                         "skills": self.skills,
                     },
                     ensure_ascii=False,
@@ -256,7 +253,6 @@ class Session:
                     meta["id"],
                     title=meta.get("title", "Задача"),
                     created_at=meta.get("created_at"),
-                    max_steps=meta.get("max_steps"),
                     skills=meta.get("skills", []),
                 )
                 session._load_events(folder / "events.jsonl")
@@ -393,10 +389,7 @@ class Session:
     def _step_budget(self) -> int:
         """Сколько действий даём агенту, по настройкам раздела «Агент».
         «Агент» — весь путь одним прогоном (steps_agent); «План» ведёт бюджет
-        на каждый пункт по отдельности (steps_plan). Предел, заданный для
-        конкретной задачи (max_steps), важнее обеих настроек."""
-        if self.max_steps:  # человек задал предел именно для этой задачи
-            return self.max_steps
+        на каждый пункт по отдельности (steps_plan)."""
         cfg = config.agent_config
         return cfg.steps_agent if self.mode == "agent" else cfg.steps_plan
 
@@ -763,7 +756,7 @@ class Session:
                 )
             else:
                 analyst.llm = LLM.isolated()
-                analyst.max_steps = self.max_steps or config.agent_config.steps_plan
+                analyst.max_steps = config.agent_config.steps_plan
                 # the analyst has its own prompt; the task's skills apply to it too
                 analyst.system_prompt += skills_store.prompt_for(self.skills)
                 agents["data_analysis"] = analyst
@@ -779,7 +772,7 @@ class Session:
             # планировщик тоже считает токены — и тоже своим счётчиком
             llm=LLM.isolated(),
             planning_context=skills_store.planning_prompt_for(self.skills),
-            step_budget=self.max_steps or config.agent_config.steps_plan,
+            step_budget=config.agent_config.steps_plan,
             # журнал находок ложится в папку задачи: это общая память шагов
             workspace=str(self.workspace),
         )
@@ -892,7 +885,6 @@ class Session:
             "pending_question": self.pending_question,
             "queued": len(self._queued),
             "workspace": str(self.workspace),
-            "max_steps": self.max_steps,
             "skills": self.skills,
             "usage": self.workspace_usage(),
             "tools": self.tools(),
