@@ -447,6 +447,24 @@ class Session:
         agent.available_tools.tools = tools
         agent.available_tools.tool_map = {tool.name: tool for tool in tools}
 
+    def _attach_ask_human(self, agent: Any) -> None:
+        """Дать агенту браузерную версию `ask_human`.
+
+        Вопрос уходит в интерфейс (карточка «Агент спрашивает»), а не в
+        несуществующий терминал контейнера. Главному агенту это делает
+        `_attach_web_tools`; здесь — исполнителю шага в режиме «План» (агенту
+        анализа данных), чтобы и он мог спросить человека, а не гадать молча,
+        когда шаг оказался неоднозначным. Если инструмент с таким именем уже
+        есть — заменяем его на браузерный, чтобы не осталось версии с input().
+        """
+        web_ask = WebAskHuman(session=self)
+        tools = tuple(
+            tool for tool in agent.available_tools.tools if tool.name != web_ask.name
+        )
+        tools = tools + (web_ask,)
+        agent.available_tools.tools = tools
+        agent.available_tools.tool_map = {tool.name: tool for tool in tools}
+
     def _carry_memory(self, agent: WebManus) -> None:
         """Give a reopened session the gist of what was said before."""
         for message in self._carried_memory:
@@ -729,6 +747,9 @@ class Session:
                 analyst.max_steps = config.agent_config.steps_plan
                 # the analyst has its own prompt; the task's skills apply to it too
                 analyst.system_prompt += skills_store.prompt_for(self.skills)
+                # чтобы исполнитель шага мог спросить человека через браузер,
+                # а не завис на input() базовой версии и не гадал молча
+                self._attach_ask_human(analyst)
                 agents["data_analysis"] = analyst
                 self.publish(
                     "log", level="INFO", message="Подключён агент анализа данных"
