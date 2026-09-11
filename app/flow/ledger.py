@@ -218,6 +218,51 @@ class Ledger:
             return tail
         return self._contents(text, omitted, len(starts)) + "\n\n" + tail
 
+    def sources(self) -> List[dict]:
+        """Использованные источники для подвала отчёта — дословно из журнала.
+
+        Берём только то, что записано: поля «Источник:» и «Дата источника:» из
+        находок, а заголовок находки — как описание того, что из источника взято.
+        Ничего не домысливаем: источника нет в списке, если его нет в журнале.
+        Повторы одного источника сводим в одну строку, описания складываем.
+        """
+        try:
+            text = self.path.read_text(encoding="utf-8")
+        except (OSError, UnicodeDecodeError):
+            return []
+        starts = _starts(text)
+        if not starts:
+            return []
+        bounds = starts + [len(text)]
+        out: List[dict] = []
+        seen: dict = {}
+        for i, start in enumerate(starts):
+            entry = text[start : bounds[i + 1]]
+            found = FIELD["source"].search(entry)
+            if not found:
+                continue
+            source = found.group(1).strip()
+            if not source:
+                continue
+            heading = HEADING.search(entry)
+            note = heading.group(1).strip() if heading else ""
+            dated = FIELD["dated"].search(entry)
+            date = dated.group(1).strip() if dated else ""
+            if source in seen:
+                item = out[seen[source]]
+                if note and note not in item["notes"]:
+                    item["notes"].append(note)
+                if date and not item["dated"]:
+                    item["dated"] = date
+            else:
+                seen[source] = len(out)
+                out.append({
+                    "source": source,
+                    "dated": date,
+                    "notes": [note] if note else [],
+                })
+        return out
+
     def _contents(self, text: str, omitted: List[int], total: int) -> str:
         """Оглавление записей, которые в окно не поместились."""
         listed = omitted[-MAX_OMITTED_LISTED:]

@@ -236,6 +236,13 @@
   .vrow .vmeta a { color: inherit; }
   .vrow .vdeep { margin-top: 4px; font-size: 12px; padding: 2px 9px; }
   .vrow .vverdict { margin-top: 4px; font-size: 12px; font-weight: 600; }
+  .sources { margin-top: 12px; border-top: 1px solid var(--line); padding-top: 8px; }
+  .sources h5 { margin: 0 0 6px; font-size: 12.5px; color: var(--muted); text-transform: uppercase; letter-spacing: .03em; }
+  .sources ol { margin: 0; padding-left: 20px; }
+  .sources li { padding: 3px 0; font-size: 13px; line-height: 1.45; }
+  .sources .sdate { color: var(--muted); }
+  .sources .sdesc { color: var(--muted); font-size: 12px; margin-top: 1px; }
+  .sources a { color: var(--accent); word-break: break-all; }
   .compat { flex: none; font-size: 11px; padding: 2px 8px; border-radius: 20px; }
   .compat.ok { background: #e4f3e8; color: #1f6b3f; }
   .compat.partial { background: #fbf0d2; color: #8a6212; }
@@ -1207,6 +1214,8 @@ function render(event) {
       details.appendChild(element("summary", null, "Журнал шагов"));
       details.appendChild(element("pre", "block out", event.message));
       done.appendChild(details);
+      // подвал ответа: использованные источники с описанием — из журнала
+      if (event.sources && event.sources.length) done.appendChild(sourcesSection(event.sources));
       // итог бывает только у «Агента» и «Плана» (у «Чата» своё событие) —
       // значит есть что сверять с журналом
       const verifyBtn = element("button", null, "Проверить отчёт");
@@ -1450,6 +1459,33 @@ function verificationCard(event) {
     box.appendChild(line);
   });
   return box;
+}
+
+// Подвал ответа: список использованных источников с описанием. Собран из
+// журнала на сервере — здесь только показываем, ничего не добавляя.
+function sourcesSection(sources) {
+  const sec = element("div", "sources");
+  sec.appendChild(element("h5", null, "Источники"));
+  const list = document.createElement("ol");
+  sources.forEach((s) => {
+    const li = document.createElement("li");
+    if (/^https?:\/\//i.test(s.source)) {
+      const a = element("a", null, s.source);
+      a.href = s.source;
+      a.target = "_blank";
+      a.rel = "noopener noreferrer";
+      li.appendChild(a);
+    } else {
+      li.appendChild(element("span", null, s.source));
+    }
+    if (s.dated) li.appendChild(element("span", "sdate", " (" + s.dated + ")"));
+    if (s.notes && s.notes.length) {
+      li.appendChild(element("div", "sdesc", s.notes.join("; ")));
+    }
+    list.appendChild(li);
+  });
+  sec.appendChild(list);
+  return sec;
 }
 
 async function deepCheck(claim, url, btn, verdictEl) {

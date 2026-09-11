@@ -747,7 +747,8 @@ class Session:
                     # отчёт для кнопки «Проверить»: итог модели, иначе вывод шага
                     self.last_report = answer or result
                     self.publish(
-                        "result", message=result, answer=answer, answer_source=source
+                        "result", message=result, answer=answer, answer_source=source,
+                        sources=Ledger(self.workspace).sources(),
                     )
             self.state = "idle"
             self.publish("status", state="idle")
@@ -838,7 +839,9 @@ class Session:
         )
         result = await asyncio.wait_for(flow.execute(prompt), timeout=FLOW_TIMEOUT)
         self.last_report = result
-        self.publish("result", message=result)
+        self.publish(
+            "result", message=result, sources=Ledger(self.workspace).sources()
+        )
 
     # ---------------------------------------------------------- проверка отчёта
 
