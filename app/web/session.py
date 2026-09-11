@@ -799,7 +799,7 @@ class Session:
         self.publish("chat", text=answer)
 
     async def _flow(self, prompt: str) -> None:
-        """Plan the task first, then work through the plan - like run_flow.py."""
+        """Plan the task first, then work through the plan (the planning flow)."""
         manus = await self.ensure_agent()
         manus.current_step = 0
         agents = {"manus": manus}

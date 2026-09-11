@@ -1745,8 +1745,8 @@ const FIELDS = {
       "Куда слать запросы. Ollama на этом же маке из Docker: http://host.docker.internal:11434/v1. Обратите внимание на /v1 в конце." },
     { key: "api_key", label: "Ключ API", type: "password", note:
       "Для Ollama и других локальных серверов подойдёт любое слово — ключ там не проверяется. Для облачных сервисов сюда идёт настоящий ключ." },
-    { key: "api_type", label: "Тип API", type: "select", options: ["", "ollama", "azure", "aws", "jiekou"], note:
-      "Оставьте пустым для Ollama, OpenAI и всего, что говорит на языке OpenAI. Отдельные значения нужны только для Azure и Amazon Bedrock." },
+    { key: "api_type", label: "Тип API", type: "select", options: ["", "ollama", "azure", "jiekou"], note:
+      "Оставьте пустым для Ollama, OpenAI и всего, что говорит на языке OpenAI. Отдельное значение нужно только для Azure." },
     { key: "api_version", label: "Версия API", type: "text", note:
       "Заполняется только для Azure, например 2024-08-01-preview. В остальных случаях пусто." },
     { key: "max_tokens", label: "Токенов в ответе", type: "number", note:

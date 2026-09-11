@@ -127,12 +127,6 @@ python main.py
 
 然后通过终端输入你的创意！
 
-如需体验不稳定的多智能体版本，可运行：
-
-```bash
-python run_flow.py
-```
-
 ## 添加自定义多智能体
 
 目前除了通用的 OpenManus Agent, 我们还内置了DataAnalysis Agent，适用于数据分析和数据可视化任务，你可以在`config.toml`中将这个智能体加入到`run_flow`中
