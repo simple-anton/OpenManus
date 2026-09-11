@@ -110,6 +110,12 @@ class CrawlDecisionRequest(BaseModel):
     decision: str
 
 
+class VerifyDeepRequest(BaseModel):
+    # одно утверждение и ссылка на источник для глубокой проверки (проход C)
+    claim: str
+    url: str = ""
+
+
 class SessionPatch(BaseModel):
     title: Optional[str] = None
     skills: Optional[List[str]] = None
@@ -349,6 +355,25 @@ def create_app() -> FastAPI:
                 status_code=409, detail="Подтверждение обхода сейчас не ожидается"
             )
         return session.info()
+
+    @app.post("/api/sessions/{session_id}/verify")
+    async def verify_report(session_id: str) -> Dict[str, Any]:
+        """Кнопка «Проверить отчёт»: сверить итог последнего прогона с журналом."""
+        session = _get_session(session_id)
+        if not await session.verify():
+            raise HTTPException(
+                status_code=409,
+                detail="Проверять нечего: нет готового отчёта или идёт прогон",
+            )
+        return session.info()
+
+    @app.post("/api/sessions/{session_id}/verify-deep")
+    async def verify_deep(
+        session_id: str, request: VerifyDeepRequest
+    ) -> Dict[str, str]:
+        """Глубокая проверка одного утверждения: заново открыть источник (проход C)."""
+        session = _get_session(session_id)
+        return await session.verify_claim_deep(request.claim, request.url)
 
     @app.post("/api/browser/forget-logins")
     async def forget_logins() -> Dict[str, Any]:

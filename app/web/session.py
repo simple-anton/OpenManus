@@ -15,11 +15,18 @@ from pathlib import Path
 from typing import Any, AsyncIterator, Dict, List, Optional, Set
 
 from app.config import config
+from app.flow.ledger import Ledger
 from app.llm import LLM
 from app.logger import logger
 from app.prompt.manus import SYSTEM_PROMPT
+from app.prompt.verify import (
+    DEEP_VERIFY_INPUT,
+    DEEP_VERIFY_PROMPT,
+    VERIFY_INPUT,
+    VERIFY_PROMPT,
+)
 from app.schema import Message
-from app.tool.http_fetch import CRAWL_MAX_DEPTH, CRAWL_MAX_PAGES, Crawl
+from app.tool.http_fetch import CRAWL_MAX_DEPTH, CRAWL_MAX_PAGES, Crawl, Fetch
 from app.tool.base import BaseTool, ToolResult
 from app.web import agent as web_agent
 from app.web import api_tools, diagnostics
@@ -72,6 +79,64 @@ ANSWER_PROMPT = (
 
 WORKSPACE = Path(config.workspace_root)
 STORE = WORKSPACE / ".sessions"
+
+# Сколько знаков журнала и страницы отдаём проверяющему. Журнал задачи целиком
+# сюда помещается с запасом; для модели с большим окном это немного.
+VERIFY_JOURNAL_CHARS = 200000
+
+_VERIFY_STATUSES = {"supported", "no_source", "mismatch", "outdated"}
+
+
+def _loads_lenient(text: str) -> Any:
+    """Разбирает JSON из ответа модели, снимая обёртку ```…``` и лишний текст
+    вокруг. Возвращает разобранное или None: проверочный проход не должен падать
+    из-за пары слов, которые модель дописала до или после JSON."""
+    if not text:
+        return None
+    t = text.strip()
+    if t.startswith("```"):  # ```json … ``` — берём самый длинный кусок
+        t = max(t.split("```"), key=len).strip()
+        if t[:4].lower() == "json":
+            t = t[4:].strip()
+    try:
+        return json.loads(t)
+    except (json.JSONDecodeError, ValueError):
+        pass
+    i, j = t.find("{"), t.rfind("}")  # вырезать от первой { до последней }
+    if 0 <= i < j:
+        try:
+            return json.loads(t[i : j + 1])
+        except (json.JSONDecodeError, ValueError):
+            return None
+    return None
+
+
+def _verify_rows(raw: str) -> List[Dict[str, str]]:
+    """Ответ проверяющего (B) → строки для карточки. Не разобрали — одна честная
+    строка с сырым текстом: ничего не выдумываем и не прячем."""
+    data = _loads_lenient(raw)
+    rows_in = data.get("rows") if isinstance(data, dict) else None
+    if not isinstance(rows_in, list):
+        return [{
+            "claim": "Ответ проверки не удалось разобрать",
+            "status": "error",
+            "source": "",
+            "url": "",
+            "note": (raw or "").strip()[:500],
+        }]
+    rows: List[Dict[str, str]] = []
+    for item in rows_in:
+        if not isinstance(item, dict):
+            continue
+        status = str(item.get("status", "")).strip()
+        rows.append({
+            "claim": str(item.get("claim", "")).strip(),
+            "status": status if status in _VERIFY_STATUSES else "mismatch",
+            "source": str(item.get("source", "")).strip(),
+            "url": str(item.get("url", "")).strip(),
+            "note": str(item.get("note", "")).strip(),
+        })
+    return rows
 
 
 class WebAskHuman(BaseTool):
@@ -152,6 +217,8 @@ class Session:
         self.state = "idle"
         self.mode = "agent"  # what the current run was started as
         self.last_output: Optional[Dict[str, str]] = None
+        # Итог последнего прогона — его проверяет кнопка «Проверить отчёт».
+        self.last_report: Optional[str] = None
         self.pending_question: Optional[str] = None
 
         self.history: List[Dict[str, Any]] = []
@@ -677,6 +744,8 @@ class Session:
                     agent.current_step = 0
                     result = await agent.run(prompt)
                     answer, source = self._closing_answer(agent)
+                    # отчёт для кнопки «Проверить»: итог модели, иначе вывод шага
+                    self.last_report = answer or result
                     self.publish(
                         "result", message=result, answer=answer, answer_source=source
                     )
@@ -768,7 +837,96 @@ class Session:
             workspace=str(self.workspace),
         )
         result = await asyncio.wait_for(flow.execute(prompt), timeout=FLOW_TIMEOUT)
+        self.last_report = result
         self.publish("result", message=result)
+
+    # ---------------------------------------------------------- проверка отчёта
+
+    async def verify(self) -> bool:
+        """Кнопка «Проверить отчёт»: запускает проход B отдельной задачей.
+
+        Отдельной — чтобы работала «Стоп» и нельзя было запустить проверку
+        поверх идущего прогона (тот же self.task). Без готового отчёта проверять
+        нечего.
+        """
+        if self.busy or not (self.last_report or "").strip():
+            return False
+        self.task = asyncio.create_task(self._verify())
+        return True
+
+    async def _verify(self) -> None:
+        """Проход B: сверяем последний отчёт с журналом находок задачи.
+
+        Проверяющий — отдельный слот модели `verifier` (в настройках), а пока он
+        пуст, LLM.isolated откатывается на основную модель. Другая модель тут
+        ценна: у неё нет общих с агентом слепых пятен.
+        """
+        self.state = "running"
+        self.publish("status", state="running")
+        try:
+            journal = Ledger(self.workspace).read(limit=VERIFY_JOURNAL_CHARS)
+            llm = LLM.isolated("verifier")
+            raw = await llm.ask(
+                messages=[Message.user_message(VERIFY_INPUT.format(
+                    report=self.last_report or "",
+                    journal=journal.strip() or "(журнал пуст)"))],
+                system_msgs=[Message.system_message(VERIFY_PROMPT)],
+                stream=False,
+            )
+            rows = _verify_rows(raw)
+            supported = sum(1 for row in rows if row["status"] == "supported")
+            self.publish(
+                "verification",
+                rows=rows,
+                supported=supported,
+                flagged=len(rows) - supported,
+                model=getattr(llm, "model", ""),
+            )
+        except asyncio.CancelledError:
+            self.publish("status", state="stopped")
+            raise
+        except Exception as exc:
+            logger.exception(f"Проверочный проход не удался: {exc}")
+            try:
+                self.publish("error", **diagnostics.explain(exc))
+            except Exception:
+                self.publish("error", source="OpenManus",
+                             title="Проверка не удалась",
+                             why="Подробности во вкладке «Логи».")
+        finally:
+            self.state = "idle"
+            self.publish("status", state="idle")
+            self.task = None
+            self._start_queued()
+
+    async def verify_claim_deep(self, claim: str, url: str) -> Dict[str, str]:
+        """Проход C: заново грузим страницу-источник и проверяем одно
+        утверждение. Вызывается кнопкой у помеченной строки — только спорное,
+        не всё подряд."""
+        claim = (claim or "").strip()
+        url = (url or "").strip()
+        if not url:
+            return {"verdict": "unclear", "note": "у этой строки нет ссылки на источник"}
+        try:
+            result = await Fetch().execute(urls=[url], max_chars=VERIFY_JOURNAL_CHARS)
+            page = (getattr(result, "output", "") or getattr(result, "error", "") or "").strip()
+        except Exception as exc:
+            return {"verdict": "unclear", "note": f"страницу не удалось загрузить: {exc}"}
+        if not page:
+            return {"verdict": "unclear", "note": "страница пустая или не открылась"}
+        llm = LLM.isolated("verifier")
+        raw = await llm.ask(
+            messages=[Message.user_message(DEEP_VERIFY_INPUT.format(
+                claim=claim, url=url, page=page[:VERIFY_JOURNAL_CHARS]))],
+            system_msgs=[Message.system_message(DEEP_VERIFY_PROMPT)],
+            stream=False,
+        )
+        data = _loads_lenient(raw)
+        verdict = data.get("verdict") if isinstance(data, dict) else None
+        if verdict not in ("supported", "mismatch", "unclear"):
+            verdict = "unclear"
+        note = (data.get("note") if isinstance(data, dict) else "") or ""
+        return {"verdict": verdict, "note": str(note).strip()[:500]}
 
     def _start_queued(self) -> None:
         if not self._queued:

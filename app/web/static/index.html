@@ -226,6 +226,16 @@
   .planbox li.blocked .mark { color: #8f2b2b; }
   /* «частично» — шаг закрыт, но часть данных он не добыл и сам это признал */
   .planbox li.partial .mark { color: #9a6b12; }
+  .vrow { display: flex; gap: 8px; align-items: flex-start; padding: 7px 0; border-top: 1px solid var(--line); font-size: 13px; line-height: 1.45; }
+  .vrow:first-of-type { border-top: none; }
+  .vrow .mark { flex: none; width: 18px; text-align: center; }
+  .vrow.ok .mark { color: #1f6b3f; }
+  .vrow.flag .mark { color: #9a6b12; }
+  .vrow .vclaim { flex: 1; min-width: 0; }
+  .vrow .vmeta { color: var(--muted); font-size: 12px; margin-top: 2px; }
+  .vrow .vmeta a { color: inherit; }
+  .vrow .vdeep { margin-top: 4px; font-size: 12px; padding: 2px 9px; }
+  .vrow .vverdict { margin-top: 4px; font-size: 12px; font-weight: 600; }
   .compat { flex: none; font-size: 11px; padding: 2px 8px; border-radius: 20px; }
   .compat.ok { background: #e4f3e8; color: #1f6b3f; }
   .compat.partial { background: #fbf0d2; color: #8a6212; }
@@ -1197,13 +1207,25 @@ function render(event) {
       details.appendChild(element("summary", null, "Журнал шагов"));
       details.appendChild(element("pre", "block out", event.message));
       done.appendChild(details);
+      // итог бывает только у «Агента» и «Плана» (у «Чата» своё событие) —
+      // значит есть что сверять с журналом
+      const verifyBtn = element("button", null, "Проверить отчёт");
+      verifyBtn.style.marginTop = "10px";
+      verifyBtn.title = "Сверить отчёт с журналом находок";
+      verifyBtn.onclick = () => verifyReport(verifyBtn);
+      done.appendChild(verifyBtn);
       append(done);
       loadFiles();
       refreshSession();
       break;
     }
+    case "verification":
+      append(verificationCard(event));
+      resetVerifyBtn();
+      break;
     case "error":
       append(errorCard(event));
+      resetVerifyBtn();
       break;
     case "warning":
       append(warningCard(event));
@@ -1347,6 +1369,107 @@ let crawlTimer = null;
 function closeCrawlConfirm() {
   if (crawlTimer) { clearInterval(crawlTimer); crawlTimer = null; }
   if (crawlLayer) { crawlLayer.remove(); crawlLayer = null; }
+}
+
+// Кнопка «Проверить отчёт»: держим её, пока проверка идёт, и возвращаем, когда
+// пришла карточка проверки или ошибка.
+let verifyingBtn = null;
+
+function resetVerifyBtn() {
+  if (verifyingBtn) {
+    verifyingBtn.disabled = false;
+    verifyingBtn.textContent = "Проверить отчёт";
+    verifyingBtn = null;
+  }
+}
+
+async function verifyReport(btn) {
+  verifyingBtn = btn;
+  if (btn) { btn.disabled = true; btn.textContent = "Проверяю…"; }
+  try {
+    await api(`/api/sessions/${currentId}/verify`, { method: "POST" });
+    // карточка с таблицей придёт отдельным событием verification
+  } catch (error) {
+    resetVerifyBtn();
+    alert("Не получилось запустить проверку: " + error.message);
+  }
+}
+
+const VERIFY_MARKS = {
+  supported: { mark: "✓", cls: "ok", label: "подтверждено журналом" },
+  no_source: { mark: "⚠", cls: "flag", label: "нет источника в журнале" },
+  mismatch: { mark: "⚠", cls: "flag", label: "источник не о том" },
+  outdated: { mark: "⏳", cls: "flag", label: "источник устарел" },
+  error: { mark: "—", cls: "flag", label: "ответ проверки не разобран" },
+};
+
+const DEEP_VERDICTS = {
+  supported: "✓ источник подтверждает",
+  mismatch: "⚠ источник говорит другое",
+  unclear: "? источник не подтверждает",
+};
+
+function verificationCard(event) {
+  const box = element("div", "card warn");
+  box.appendChild(element("h4", null, "Проверка отчёта"));
+  const head = "Сверка отчёта с журналом" +
+    (event.model ? " (модель: " + event.model + ")" : "") +
+    ". Подтверждено: " + (event.supported || 0) +
+    ", под вопросом: " + (event.flagged || 0) +
+    ". Что источник действительно это содержит — кнопкой «глубокая проверка»: " +
+    "она заново открывает страницу.";
+  box.appendChild(element("div", "meta", head));
+  const rows = event.rows || [];
+  if (!rows.length) {
+    box.appendChild(element("div", "text",
+      "Проверяемых утверждений в отчёте не нашлось."));
+    return box;
+  }
+  rows.forEach((row) => {
+    const info = VERIFY_MARKS[row.status] || VERIFY_MARKS.mismatch;
+    const line = element("div", "vrow " + info.cls);
+    line.appendChild(element("span", "mark", info.mark));
+    const body = element("div", "vclaim");
+    body.appendChild(element("div", null, row.claim || "—"));
+    const bits = [info.label];
+    if (row.source) bits.push("источник: " + row.source);
+    if (row.note) bits.push(row.note);
+    const meta = element("div", "vmeta", bits.join(" · "));
+    body.appendChild(meta);
+    // глубокая проверка — только для спорных строк, у которых есть ссылка
+    if (row.status !== "supported" && row.url) {
+      const verdict = element("div", "vverdict");
+      verdict.hidden = true;
+      const deep = element("button", "vdeep", "Глубокая проверка");
+      deep.title = "Заново открыть источник и проверить это утверждение";
+      deep.onclick = () => deepCheck(row.claim, row.url, deep, verdict);
+      body.appendChild(deep);
+      body.appendChild(verdict);
+    }
+    line.appendChild(body);
+    box.appendChild(line);
+  });
+  return box;
+}
+
+async function deepCheck(claim, url, btn, verdictEl) {
+  const old = btn.textContent;
+  btn.disabled = true;
+  btn.textContent = "Открываю источник…";
+  try {
+    const res = await api(`/api/sessions/${currentId}/verify-deep`, {
+      method: "POST", body: JSON.stringify({ claim, url }),
+    });
+    const label = DEEP_VERDICTS[res.verdict] || res.verdict;
+    verdictEl.textContent = "Глубокая проверка: " + label +
+      (res.note ? " — " + res.note : "");
+    verdictEl.hidden = false;
+    btn.remove();
+  } catch (error) {
+    btn.disabled = false;
+    btn.textContent = old;
+    alert("Глубокая проверка не удалась: " + error.message);
+  }
 }
 
 async function decideCrawl(decision, buttons) {
@@ -1554,6 +1677,8 @@ const SECTIONS = [
     "Отдельная модель, которая смотрит на снимки экрана вместо основной и пересказывает их словами: что за страница, нет ли капчи или формы входа, какие видны числа. Нужна, когда основная модель картинок не понимает. Если основная умеет — включите галочку на вкладке «Модель», и снимки пойдут прямо ей. Пусто и галочка выключена — агент снимок сделает, но не увидит, и честно об этом скажет." },
   { id: "reader", label: "Модель чтения", note:
     "Ею пересказываются длинные ответы инструментов: страницы, документы, выдачи браузера. Оставьте пустым — читать будет основная модель. Отдельную модель здесь имеет смысл ставить более дешёвую и быструю: работа простая, но объёмная." },
+  { id: "verifier", label: "Модель проверяющего", note:
+    "Ею работает кнопка «Проверить отчёт»: сверяет готовый отчёт с журналом находок. Смысл ставить сюда ДРУГУЮ модель, чем у агента, — у неё не будет тех же слепых пятен, и вторая пара глаз получится независимой. Пусто — проверяет основная модель (тогда это просто самопроверка)." },
   { id: "agent", label: "Агент", note:
     "Пределы, которые зависят от того, какая модель у вас стоит. Модель с большим окном может читать источники целиком; модели с маленьким окном длинный текст просто не поместится." },
   { id: "browser", label: "Браузер", note:
@@ -1663,6 +1788,16 @@ const FIELDS = {
     { key: "temperature", label: "Температура", type: "number", step: "0.1", note:
       "Здесь нужен ноль: пересказ не место для фантазии." },
   ],
+  verifier: [
+    { key: "model", label: "Модель", type: "text", note:
+      "Имя модели, которая проверяет отчёт. Пусто — проверяет основная модель. Лучше поставить сюда другую: независимая проверка сильнее самопроверки." },
+    { key: "base_url", label: "Адрес API", type: "text", note: "Адрес этой модели. Может быть другой сервис, чем у основной." },
+    { key: "api_key", label: "Ключ API", type: "password", note: "Ключ для этой модели." },
+    { key: "max_tokens", label: "Токенов в ответе", type: "number", note:
+      "Предел длины ответа проверки. Таблица проверки короткая, 4000–8000 достаточно." },
+    { key: "temperature", label: "Температура", type: "number", step: "0.1", note:
+      "Ноль: проверка не место для фантазии." },
+  ],
   agent: [
     { key: "condense", label: "Длинные ответы пересказывать, а не обрезать", type: "bool", showDefault: true, note:
       "Включено — всё, что не помещается в окно видимости, проходит через модель чтения целиком и возвращается выжимкой с дословными цифрами. Ничего не пропадает из поля зрения агента, но каждый длинный ответ стоит одного-двух обращений к модели чтения. " +
@@ -1693,6 +1828,7 @@ const FIELDS = {
 function fieldValue(section, key) {
   if (section === "vision") return ((settings.sections.llm || {}).vision || {})[key];
   if (section === "reader") return ((settings.sections.llm || {}).reader || {})[key];
+  if (section === "verifier") return ((settings.sections.llm || {}).verifier || {})[key];
   return (settings.sections[section] || {})[key];
 }
 
@@ -2577,12 +2713,15 @@ function collectSettings() {
       ? (sections.llm.vision = sections.llm.vision || {})
       : section === "reader"
         ? (sections.llm.reader = sections.llm.reader || {})
-        : (sections[section] = sections[section] || {});
+        : section === "verifier"
+          ? (sections.llm.verifier = sections.llm.verifier || {})
+          : (sections[section] = sections[section] || {});
     if (value === null || value === "" || (Array.isArray(value) && !value.length)) delete target[key];
     else target[key] = value;
   });
   if (sections.llm.vision && !sections.llm.vision.model) delete sections.llm.vision;
   if (sections.llm.reader && !sections.llm.reader.model) delete sections.llm.reader;
+  if (sections.llm.verifier && !sections.llm.verifier.model) delete sections.llm.verifier;
   return sections;
 }
 
