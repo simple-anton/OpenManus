@@ -567,8 +567,16 @@ class LLM:
             # Add images to content
             for image in images:
                 if isinstance(image, str):
+                    # Снимки приходят голым base64. Провайдер ждёт настоящий URL
+                    # или data-URI — без префикса он отвергает картинку как
+                    # «Invalid URL format». Готовый URL/ data: не трогаем.
+                    url = (
+                        image
+                        if image.startswith(("http://", "https://", "data:"))
+                        else f"data:image/png;base64,{image}"
+                    )
                     multimodal_content.append(
-                        {"type": "image_url", "image_url": {"url": image}}
+                        {"type": "image_url", "image_url": {"url": url}}
                     )
                 elif isinstance(image, dict) and "url" in image:
                     multimodal_content.append({"type": "image_url", "image_url": image})
